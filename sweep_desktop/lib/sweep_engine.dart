@@ -129,23 +129,33 @@ class SweepEngine {
         final diskRes = await Process.run('df', ['-h', '/']);
         if (diskRes.exitCode == 0) {
           final lines = diskRes.stdout.toString().split('\n');
-          if (lines.length > 1) storage = lines[1].split(RegExp(r'\s+'))[3];
+          if (lines.length > 1) {
+            final parts = lines[1].split(RegExp(r'\s+'));
+            if (parts.length > 3) storage = parts[3];
+          }
         }
-        final memRes = await Process.run('bash', ['-c', "top -l 1 -s 0 | grep PhysMem | awk '{print \$2}'"]);
-        if (memRes.exitCode == 0) ram = memRes.stdout.toString().trim();
-        final cpuRes = await Process.run('bash', ['-c', "top -l 1 | grep 'CPU usage' | awk '{print \$3}'"]);
-        if (cpuRes.exitCode == 0) cpu = cpuRes.stdout.toString().trim();
+        // Using simpler grep/awk for macOS
+        final memRes = await Process.run('bash', ['-c', "top -l 1 | grep 'PhysMem'"]);
+        if (memRes.exitCode == 0) {
+          final match = RegExp(r'PhysMem: ([\w\d]+) used').firstMatch(memRes.stdout.toString());
+          if (match != null) ram = match.group(1)!;
+        }
+        final cpuRes = await Process.run('bash', ['-c', "top -l 1 | grep 'CPU usage'"]);
+        if (cpuRes.exitCode == 0) {
+          final match = RegExp(r'CPU usage: ([\d\.]+)% user').firstMatch(cpuRes.stdout.toString());
+          if (match != null) cpu = '${match.group(1)}%';
+        }
       } else if (Platform.isWindows) {
         final diskRes = await Process.run('powershell', ['-Command', '[math]::round(((Get-PSDrive C).Free / 1GB), 1)']);
         if (diskRes.exitCode == 0) storage = '${diskRes.stdout.toString().trim()} GB';
-        final memRes = await Process.run('powershell', ['-Command', "(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB"]);
-        if (memRes.exitCode == 0) ram = '${double.parse(memRes.stdout.toString()).toStringAsFixed(1)} GB Free';
+        final memRes = await Process.run('powershell', ['-Command', "[math]::round(((Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize - (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory) / 1MB, 1)"]);
+        if (memRes.exitCode == 0) ram = '${memRes.stdout.toString().trim()} GB used';
         final cpuRes = await Process.run('powershell', ['-Command', "(Get-CimInstance Win32_Processor).LoadPercentage"]);
         if (cpuRes.exitCode == 0) cpu = '${cpuRes.stdout.toString().trim()}%';
       } else if (Platform.isLinux) {
         final diskRes = await Process.run('df', ['-h', '/']);
         if (diskRes.exitCode == 0) storage = diskRes.stdout.toString().split('\n')[1].split(RegExp(r'\s+'))[3];
-        final memRes = await Process.run('bash', ['-c', "free -h | awk 'NR==2{print \$7}'"]);
+        final memRes = await Process.run('bash', ['-c', "free -h | awk 'NR==2{print \$3}'"]);
         if (memRes.exitCode == 0) ram = memRes.stdout.toString().trim();
         final cpuRes = await Process.run('bash', ['-c', "top -bn1 | grep 'Cpu(s)' | awk '{print \$2}'"]);
         if (cpuRes.exitCode == 0) cpu = '${cpuRes.stdout.toString().trim()}%';

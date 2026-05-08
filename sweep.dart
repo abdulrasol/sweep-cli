@@ -31,7 +31,6 @@ class CleanupItem {
   final String label;
   final String category;
   final String? path;
-  final List<String>? batchPaths;
   final String? command;
   final String? upgradeCommand;
   final String? warning;
@@ -47,7 +46,6 @@ class CleanupItem {
     required this.label,
     required this.category,
     this.path,
-    this.batchPaths,
     this.command,
     this.upgradeCommand,
     this.warning,
@@ -59,10 +57,22 @@ class CleanupItem {
   });
 
   bool get isStale => lastModified != null && DateTime.now().difference(lastModified!).inDays > 30;
+}
 
-  String get displayPath => isBatch 
-      ? '${batchPaths?.length ?? 0} locations' 
-      : (path ?? command ?? '');
+class SystemStats {
+  final String osName;
+  final String storageLeft;
+  final String ramUsage;
+  final String cpuUsage;
+
+  SystemStats({
+    required this.osName,
+    required this.storageLeft,
+    required this.ramUsage,
+    required this.cpuUsage,
+  });
+
+  factory SystemStats.empty() => SystemStats(osName: 'Loading...', storageLeft: '-', ramUsage: '-', cpuUsage: '-');
 }
 
 // ANSI Colors
@@ -107,6 +117,58 @@ Future<String?> getDirSize(String path) async {
     }
   } catch (_) {}
   return '0M';
+}
+
+Future<SystemStats> getSystemStats() async {
+  String os = Platform.operatingSystem;
+  String version = Platform.operatingSystemVersion;
+  String storage = '-';
+  String ram = '-';
+  String cpu = '-';
+
+  try {
+    if (Platform.isMacOS) {
+      final diskRes = await Process.run('df', ['-h', '/']);
+      if (diskRes.exitCode == 0) {
+        final lines = diskRes.stdout.toString().split('\n');
+        if (lines.length > 1) {
+          final parts = lines[1].split(RegExp(r'\s+'));
+          if (parts.length > 3) storage = parts[3];
+        }
+      }
+      final memRes = await Process.run('bash', ['-c', "top -l 1 | grep 'PhysMem'"]);
+      if (memRes.exitCode == 0) {
+        final match = RegExp(r'PhysMem: ([\w\d]+) used').firstMatch(memRes.stdout.toString());
+        if (match != null) ram = match.group(1)!;
+      }
+      final cpuRes = await Process.run('bash', ['-c', "top -l 1 | grep 'CPU usage'"]);
+      if (cpuRes.exitCode == 0) {
+        final match = RegExp(r'CPU usage: ([\d\.]+)% user').firstMatch(cpuRes.stdout.toString());
+        if (match != null) cpu = '${match.group(1)}%';
+      }
+    } else if (Platform.isWindows) {
+      final diskRes = await Process.run('powershell', ['-Command', '[math]::round(((Get-PSDrive C).Free / 1GB), 1)']);
+      if (diskRes.exitCode == 0) storage = '${diskRes.stdout.toString().trim()} GB';
+      final memRes = await Process.run('powershell', ['-Command', "[math]::round(((Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize - (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory) / 1MB, 1)"]);
+      if (memRes.exitCode == 0) ram = '${memRes.stdout.toString().trim()} GB used';
+      final cpuRes = await Process.run('powershell', ['-Command', "(Get-CimInstance Win32_Processor).LoadPercentage"]);
+      if (cpuRes.exitCode == 0) cpu = '${cpuRes.stdout.toString().trim()}%';
+    } else if (Platform.isLinux) {
+      final diskRes = await Process.run('df', ['-h', '/']);
+      if (diskRes.exitCode == 0) storage = diskRes.stdout.toString().split('\n')[1].split(RegExp(r'\s+'))[3];
+      final memRes = await Process.run('bash', ['-c', "free -h | awk 'NR==2{print \$3}'"]);
+      if (memRes.exitCode == 0) ram = memRes.stdout.toString().trim();
+      final cpuRes = await Process.run('bash', ['-c', "top -bn1 | grep 'Cpu(s)' | awk '{print \$2}'"]);
+      if (cpuRes.exitCode == 0) cpu = '${cpuRes.stdout.toString().trim()}%';
+    }
+  } catch (_) {}
+
+  return SystemStats(
+    osName: '${os[0].toUpperCase()}${os.substring(1)} ($version)',
+    storageLeft: storage,
+    ramUsage: ram,
+    cpuUsage: cpu,
+  );
 }
 
 double parseSizeToMb(String? sizeStr) {
@@ -273,7 +335,6 @@ Future<void> runDesktopInstall() async {
   await runDesktopBuild();
   if (Platform.isMacOS) {
     print('Installing to Applications...');
-    // Renaming the resulting app to sweep.app
     await Process.run('cp', ['-R', 'sweep_desktop/build/macos/Build/Products/Release/sweep.app', '/Applications/'], runInShell: true);
     print('Success! Sweep is now in your Applications folder.');
   } else {
@@ -323,7 +384,7 @@ void main(List<String> args) async {
   while (true) {
     stdout.write('\x1B[2J\x1B[H');
     print('${blue}-----------------------------------------------------------------------$reset');
-    print(' $bold${white}🧹 Sweep CLI: Master Maintenance Suite v2.2$reset');
+    print(' $bold${white}Sweep CLI: Master Maintenance Suite v2.2$reset');
     print(' ${green}Powered and built by Abdulrasol with love of AI$reset');
     print('${blue}-----------------------------------------------------------------------$reset');
     stdout.write('$bold${white}Enter directory to scan [default: ${config.lastPath}]: $reset');
@@ -333,10 +394,21 @@ void main(List<String> args) async {
     if (!scanDir.existsSync()) { print('${red}Error: Not found.$reset'); continue; }
     config.save();
 
-    print('${gray}Performing High-Performance Scan...$reset');
+    print('${gray}Performing Smart Deep Scan...$reset');
     final allItems = <CleanupItem>[];
-    allItems.add(CleanupItem(label: 'Docker System Prune', category: 'SYSTEM MAINTENANCE', command: 'docker system prune -f'));
-    if (Platform.isMacOS) allItems.add(CleanupItem(label: 'Xcode DerivedData', category: 'GLOBAL CACHES', path: '$home/Library/Developer/Xcode/DerivedData'));
+    
+    final sysMaintenance = [
+      CleanupItem(label: 'Homebrew Upgrade', category: 'SYSTEM MAINTENANCE', command: 'brew update && brew upgrade'),
+      CleanupItem(label: 'Docker System Prune', category: 'SYSTEM MAINTENANCE', command: 'docker system prune -f'),
+      CleanupItem(label: 'NPM Global Update', category: 'SYSTEM MAINTENANCE', command: 'npm install -g npm@latest'),
+    ];
+    for (var item in sysMaintenance) { allItems.add(item); }
+
+    if (Platform.isMacOS) {
+      allItems.add(CleanupItem(label: 'Xcode DerivedData', category: 'GLOBAL CACHES', path: '$home/Library/Developer/Xcode/DerivedData'));
+      allItems.add(CleanupItem(label: 'Xcode Tool Caches', category: 'GLOBAL CACHES', path: '$home/Library/Caches/com.apple.dt.Xcode'));
+      allItems.add(CleanupItem(label: 'iOS Simulators', category: 'GLOBAL CACHES', command: 'xcrun simctl delete unavailable'));
+    }
 
     final Map<Framework, List<CleanupItem>> frameworkProjects = {};
     final List<CleanupItem> bigFileItems = [];
@@ -390,6 +462,12 @@ void main(List<String> args) async {
     int cursor = 0; int scrollOffset = 0; bool dryRun = false;
     final stack = <List<CleanupItem>>[];
     final cursorStack = <int>[];
+    SystemStats sysStats = SystemStats.empty();
+    Timer.periodic(const Duration(seconds: 5), (t) async {
+      sysStats = await getSystemStats();
+    });
+    // Initial fetch
+    sysStats = await getSystemStats();
 
     stdin.lineMode = false; stdin.echoMode = false;
     bool actionConfirmed = false;
@@ -414,6 +492,8 @@ void main(List<String> args) async {
       }
       print('${blue}-----------------------------------------------------------------------$reset');
       print('${bold}Selection:${reset} ${currentList.where((i)=>i.selected).length} | ${bold}Total:${reset} ${green}${formatMb(totalMb)}$reset');
+      print('${blue}-----------------------------------------------------------------------$reset');
+      print('${white}OS:${reset} ${sysStats.osName.split(' (').first} | ${white}Free Disk:${reset} ${green}${sysStats.storageLeft}${reset} | ${white}RAM:${reset} ${yellow}${sysStats.ramUsage}${reset} | ${white}CPU:${reset} ${blue}${sysStats.cpuUsage}${reset}');
 
       final byte = stdin.readByteSync();
       if (byte == 27) {
@@ -462,8 +542,12 @@ void main(List<String> args) async {
       if (!dryRun) {
         if (item.maintainSelected && item.upgradeCommand != null) await Process.run(item.upgradeCommand!.split(' ')[0], item.upgradeCommand!.split(' ').sublist(1), workingDirectory: item.path, runInShell: true);
         if (item.selected) {
-          if (item.command != null) await Process.run(item.command!.split(' ')[0], item.command!.split(' ').sublist(1), workingDirectory: item.path, runInShell: true);
-          else if (item.path != null) { 
+          if (item.command != null) {
+            final cmd = item.category == 'GIT HYGIENE' ? 'bash' : item.command!;
+            final args = item.category == 'GIT HYGIENE' ? ['-c', item.command!] : <String>[];
+            await Process.run(cmd, args, workingDirectory: item.category.startsWith('BIG FILES') ? null : item.path, runInShell: true);
+            if (item.category.startsWith('BIG FILES')) { try { File(item.path!).deleteSync(); } catch (_) {} }
+          } else if (item.path != null) { 
             if (FileSystemEntity.isDirectorySync(item.path!)) Directory(item.path!).deleteSync(recursive: true);
             else File(item.path!).deleteSync();
           }
