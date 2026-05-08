@@ -42,6 +42,11 @@ Cleans build artifacts safely across all major environments:
 ### 4. 🌳 **Git Hygiene**
 Scans for local branches that have already been merged into `main` or `master` and offers to delete them in bulk.
 
+### 5. 🌟 **v2.0 Elite Features**
+-   **Extensibility:** Add your own frameworks by editing `~/.sweep_rules.json`.
+-   **Visual Dashboard:** Run `sweep --stats` to see a bar chart of your lifetime space savings.
+-   **Self-Updating:** Keep the tool on the cutting edge by running `sweep --update`.
+
 ---
 
 ## 🖥 Platform Support
@@ -68,7 +73,10 @@ Scans for local branches that have already been merged into `main` or `master` a
     ```bash
     dart sweep.dart --install
     ```
-4.  **Usage:** Just type `sweep` anywhere!
+4.  **Usage:** 
+    - `sweep` : Open the interactive console.
+    - `sweep --stats` : View your space savings dashboard.
+    - `sweep --update` : Download and install the latest version from GitHub.
 
 ### Quick Install (Windows)
 1.  Open PowerShell as Administrator.
