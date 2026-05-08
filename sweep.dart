@@ -273,8 +273,9 @@ Future<void> runDesktopInstall() async {
   await runDesktopBuild();
   if (Platform.isMacOS) {
     print('Installing to Applications...');
-    await Process.run('cp', ['-R', 'sweep_desktop/build/macos/Build/Products/Release/sweep_desktop.app', '/Applications/'], runInShell: true);
-    print('Success! Sweep Desktop is now in your Applications folder.');
+    // Renaming the resulting app to sweep.app
+    await Process.run('cp', ['-R', 'sweep_desktop/build/macos/Build/Products/Release/sweep.app', '/Applications/'], runInShell: true);
+    print('Success! Sweep is now in your Applications folder.');
   } else {
     print('Automatic installation only supported on macOS for now. Please move the built binary manually.');
   }

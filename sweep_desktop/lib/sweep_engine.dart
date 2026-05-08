@@ -59,6 +59,22 @@ class CleanupItem {
   bool get isStale => lastModified != null && DateTime.now().difference(lastModified!).inDays > 30;
 }
 
+class SystemStats {
+  final String osName;
+  final String storageLeft;
+  final String ramUsage;
+  final String cpuUsage;
+
+  SystemStats({
+    required this.osName,
+    required this.storageLeft,
+    required this.ramUsage,
+    required this.cpuUsage,
+  });
+
+  factory SystemStats.empty() => SystemStats(osName: 'Loading...', storageLeft: '-', ramUsage: '-', cpuUsage: '-');
+}
+
 class SweepEngine {
   static Future<String?> getDirSize(String path) async {
     try {
@@ -99,6 +115,49 @@ class SweepEngine {
   static String formatMb(double mb) {
     if (mb >= 1024) return '${(mb / 1024).toStringAsFixed(2)} GB';
     return '${mb.toStringAsFixed(2)} MB';
+  }
+
+  static Future<SystemStats> getSystemStats() async {
+    String os = Platform.operatingSystem;
+    String version = Platform.operatingSystemVersion;
+    String storage = '-';
+    String ram = '-';
+    String cpu = '-';
+
+    try {
+      if (Platform.isMacOS) {
+        final diskRes = await Process.run('df', ['-h', '/']);
+        if (diskRes.exitCode == 0) {
+          final lines = diskRes.stdout.toString().split('\n');
+          if (lines.length > 1) storage = lines[1].split(RegExp(r'\s+'))[3];
+        }
+        final memRes = await Process.run('bash', ['-c', "top -l 1 -s 0 | grep PhysMem | awk '{print \$2}'"]);
+        if (memRes.exitCode == 0) ram = memRes.stdout.toString().trim();
+        final cpuRes = await Process.run('bash', ['-c', "top -l 1 | grep 'CPU usage' | awk '{print \$3}'"]);
+        if (cpuRes.exitCode == 0) cpu = cpuRes.stdout.toString().trim();
+      } else if (Platform.isWindows) {
+        final diskRes = await Process.run('powershell', ['-Command', '[math]::round(((Get-PSDrive C).Free / 1GB), 1)']);
+        if (diskRes.exitCode == 0) storage = '${diskRes.stdout.toString().trim()} GB';
+        final memRes = await Process.run('powershell', ['-Command', "(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB"]);
+        if (memRes.exitCode == 0) ram = '${double.parse(memRes.stdout.toString()).toStringAsFixed(1)} GB Free';
+        final cpuRes = await Process.run('powershell', ['-Command', "(Get-CimInstance Win32_Processor).LoadPercentage"]);
+        if (cpuRes.exitCode == 0) cpu = '${cpuRes.stdout.toString().trim()}%';
+      } else if (Platform.isLinux) {
+        final diskRes = await Process.run('df', ['-h', '/']);
+        if (diskRes.exitCode == 0) storage = diskRes.stdout.toString().split('\n')[1].split(RegExp(r'\s+'))[3];
+        final memRes = await Process.run('bash', ['-c', "free -h | awk 'NR==2{print \$7}'"]);
+        if (memRes.exitCode == 0) ram = memRes.stdout.toString().trim();
+        final cpuRes = await Process.run('bash', ['-c', "top -bn1 | grep 'Cpu(s)' | awk '{print \$2}'"]);
+        if (cpuRes.exitCode == 0) cpu = '${cpuRes.stdout.toString().trim()}%';
+      }
+    } catch (_) {}
+
+    return SystemStats(
+      osName: '${os[0].toUpperCase()}${os.substring(1)} ($version)',
+      storageLeft: storage,
+      ramUsage: ram,
+      cpuUsage: cpu,
+    );
   }
 
   static Future<List<CleanupItem>> scan(String pathString, List<String> ignoredPaths) async {
