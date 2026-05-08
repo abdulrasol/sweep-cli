@@ -31,9 +31,11 @@ Cleans build artifacts safely across all major environments:
 -   **Python:** `.venv`, `__pycache__`, `.pytest_cache`.
 -   **Rust:** `cargo clean`, `target`.
 -   **Java/Maven:** `target`, `build`.
+-   **Go:** `go clean -cache`, `pkg/mod`.
+-   **.NET/C#:** `dotnet clean`, `bin/obj`.
 
 ### 3. 🛠 **System Maintenance & Health**
--   **Global Caches:** Clears Homebrew, NPM, Yarn, and Pip global caches.
+-   **Global Caches:** Clears Homebrew, NPM, Yarn, Bun, and Pip global caches.
 -   **Docker:** Performs a deep prune of unused containers and images.
 -   **Health Audit:** Runs background security checks (`npm audit`, `flutter pub outdated`).
 -   **One-Click Fix:** Press `M` to automatically upgrade dependencies for unhealthy projects.
@@ -42,10 +44,28 @@ Cleans build artifacts safely across all major environments:
 ### 4. 🌳 **Git Hygiene**
 Scans for local branches that have already been merged into `main` or `master` and offers to delete them in bulk.
 
-### 5. 🌟 **v2.0 Elite Features**
--   **Extensibility:** Add your own frameworks by editing `~/.sweep_rules.json`.
--   **Visual Dashboard:** Run `sweep --stats` to see a bar chart of your lifetime space savings.
--   **Self-Updating:** Keep the tool on the cutting edge by running `sweep --update`.
+---
+
+## 🌟 v2.0 Elite Features
+
+### 🧩 **Custom Rules System**
+Sweep is now fully extensible. You can add your own custom cleanup rules by editing `~/.sweep_rules.json`.
+Example entry:
+```json
+{
+  "name": "Custom Framework",
+  "markers": ["custom.config"],
+  "cleanupLabel": "Clean Cache",
+  "command": "custom-cli clean",
+  "foldersToNuke": ["temp", "cache"]
+}
+```
+
+### 📊 **Visual Savings Dashboard**
+Track your progress over time. Run `sweep --stats` to see a bar chart of how many GBs you've reclaimed in your lifetime.
+
+### 🔄 **Self-Update Engine**
+Keep Sweep on the cutting edge. Run `sweep --update` to automatically fetch the latest logic, markers, and security checks directly from GitHub and re-install the binary.
 
 ---
 
@@ -73,10 +93,7 @@ Scans for local branches that have already been merged into `main` or `master` a
     ```bash
     dart sweep.dart --install
     ```
-4.  **Usage:** 
-    - `sweep` : Open the interactive console.
-    - `sweep --stats` : View your space savings dashboard.
-    - `sweep --update` : Download and install the latest version from GitHub.
+4.  **Usage:** Just type `sweep` anywhere!
 
 ### Quick Install (Windows)
 1.  Open PowerShell as Administrator.
@@ -105,12 +122,15 @@ Scans for local branches that have already been merged into `main` or `master` a
 
 ---
 
-## 📄 License & Credits
--   **Author:** Abdulrasol
--   **Engine:** Built via "Voice Coding" and collaboration with **Google Gemini 1.5 Flash**.
--   **License:** MIT - Feel free to use, modify, and share.
-
-*Every cleanup session generates a `cleanup_report.md` in your scan root for full transparency.*
+## 🩺 Automated Reports
+Every session generates a professional `cleanup_report.md` in your scan root, detailing exactly which files were removed, space reclaimed, and any security issues found.
 
 ---
-**Built by Abdulrasol with love of AI.**
+
+## 🏗 Future Roadmap: Sweep Desktop
+We are currently working on a beautiful **Flutter Desktop GUI** for Sweep. The scaffold is already initialized in `/sweep_desktop`. Stay tuned for a one-click visual experience with real-time graphs!
+
+---
+
+### **Built by Abdulrasol**
+*Crafted with high-performance Dart and AI assistance.*
