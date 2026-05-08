@@ -127,8 +127,16 @@ Every session generates a professional `cleanup_report.md` in your scan root, de
 
 ---
 
-## 🏗 Future Roadmap: Sweep Desktop
-We are currently working on a beautiful **Flutter Desktop GUI** for Sweep. The scaffold is already initialized in `/sweep_desktop`. Stay tuned for a one-click visual experience with real-time graphs!
+## 🏗 Sweep Desktop (Beta)
+We have just launched the **Sweep Desktop GUI**! It provides a beautiful visual dashboard for all the cleanup tasks.
+
+### Run Desktop App:
+1.  Navigate to the desktop folder: `cd sweep_desktop`
+2.  Run with Flutter:
+    ```bash
+    flutter run
+    ```
+*(Supports macOS, Windows, and Linux)*.
 
 ---
 
