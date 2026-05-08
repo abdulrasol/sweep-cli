@@ -206,7 +206,31 @@ void loadCustomFrameworks(List<Framework> frameworks) {
   } catch (_) {}
 }
 
+Future<void> showHelp() async {
+  print('\n$bold${blue}-----------------------------------------------------------------------$reset');
+  print(' $bold${white}📖 Sweep CLI: Help & Usage Guide$reset');
+  print('$bold${blue}-----------------------------------------------------------------------$reset');
+  print(' ${bold}${cyan}Flags:$reset');
+  print('   ${yellow}--install$reset  : Compiles and installs sweep as a global binary.');
+  print('   ${yellow}--update$reset   : Automatically updates to the latest version.');
+  print('   ${yellow}--stats$reset    : Views your lifetime storage savings dashboard.');
+  print('   ${yellow}-h, --help$reset : Shows this help guide.');
+  print('');
+  print(' ${bold}${cyan}Keyboard Shortcuts (Inside Console):$reset');
+  print('   ${bold}Arrows ↑/↓$reset  : Navigate the list (Scrolls automatically)');
+  print('   ${bold}Space$reset      : Toggle item for cleanup');
+  print('   ${bold}Enter$reset      : Open a batch sub-menu OR Run Cleanup (if selected)');
+  print('   ${bold}M$reset          : Toggle Maintenance [FIX] (Auto-upgrade deps)');
+  print('   ${bold}I$reset          : Add project to permanent Ignore list');
+  print('   ${bold}D$reset          : Toggle Dry Run mode (Simulation)');
+  print('   ${bold}X$reset          : Execute all selected tasks');
+  print('   ${bold}B$reset          : Go back from a sub-menu');
+  print('   ${bold}Q / ESC$reset    : Exit the tool');
+  print('$bold${blue}-----------------------------------------------------------------------$reset\n');
+}
+
 void main(List<String> args) async {
+  if (args.contains('-h') || args.contains('--help')) { await showHelp(); return; }
   if (args.contains('--install')) {
     final binaryName = Platform.isWindows ? 'sweep.exe' : 'sweep';
     print('Compiling to $binaryName...');
