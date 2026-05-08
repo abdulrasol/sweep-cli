@@ -31,6 +31,7 @@ class CleanupItem {
   final String label;
   final String category;
   final String? path;
+  final List<String>? batchPaths;
   final String? command;
   final String? upgradeCommand;
   final String? warning;
@@ -46,6 +47,7 @@ class CleanupItem {
     required this.label,
     required this.category,
     this.path,
+    this.batchPaths,
     this.command,
     this.upgradeCommand,
     this.warning,
@@ -57,22 +59,10 @@ class CleanupItem {
   });
 
   bool get isStale => lastModified != null && DateTime.now().difference(lastModified!).inDays > 30;
-}
 
-class SystemStats {
-  final String osName;
-  final String storageLeft;
-  final String ramUsage;
-  final String cpuUsage;
-
-  SystemStats({
-    required this.osName,
-    required this.storageLeft,
-    required this.ramUsage,
-    required this.cpuUsage,
-  });
-
-  factory SystemStats.empty() => SystemStats(osName: 'Loading...', storageLeft: '-', ramUsage: '-', cpuUsage: '-');
+  String get displayPath => isBatch 
+      ? '${batchPaths?.length ?? 0} locations' 
+      : (path ?? command ?? '');
 }
 
 // ANSI Colors
@@ -240,6 +230,22 @@ class Stats {
   }
 }
 
+class SystemStats {
+  final String osName;
+  final String storageLeft;
+  final String ramUsage;
+  final String cpuUsage;
+
+  SystemStats({
+    required this.osName,
+    required this.storageLeft,
+    required this.ramUsage,
+    required this.cpuUsage,
+  });
+
+  factory SystemStats.empty() => SystemStats(osName: 'Loading...', storageLeft: '-', ramUsage: '-', cpuUsage: '-');
+}
+
 Future<void> showDashboard() async {
   final stats = await Stats.load();
   print('\n$bold${blue}-----------------------------------------------------------------------$reset');
@@ -277,6 +283,7 @@ Future<void> showHelp() async {
   print('   ${yellow}--install-desktop $reset : Builds and installs the Desktop app to your system.');
   print('   ${yellow}--update          $reset : Automatically updates to the latest version.');
   print('   ${yellow}--stats           $reset : Views your lifetime storage savings dashboard.');
+  print('   ${yellow}--doctor          $reset : Runs a health check on your dev environment.');
   print('   ${yellow}-h, --help        $reset : Shows this help guide.');
   print('');
   print(' ${bold}${cyan}Keyboard Shortcuts (Inside Console):$reset');
@@ -289,6 +296,41 @@ Future<void> showHelp() async {
   print('   ${bold}X$reset          : Execute all selected tasks');
   print('   ${bold}B$reset          : Go back from a sub-menu');
   print('   ${bold}Q / ESC$reset    : Exit the tool');
+  print('$bold${blue}-----------------------------------------------------------------------$reset\n');
+}
+
+Future<void> runDoctor() async {
+  print('\n$bold${blue}-----------------------------------------------------------------------$reset');
+  print(' $bold${white}🩺 Sweep Environment Doctor$reset');
+  print('$bold${blue}-----------------------------------------------------------------------$reset');
+  
+  final checks = {
+    'Dart': 'dart --version',
+    'Flutter': 'flutter --version',
+    'Node.js': 'node --version',
+    'NPM': 'npm --version',
+    'Python': 'python3 --version',
+    'Rust': 'rustc --version',
+    'Go': 'go version',
+    'Docker': 'docker --version',
+    'Homebrew': 'brew --version',
+    'Git': 'git --version',
+  };
+
+  for (var entry in checks.entries) {
+    stdout.write('${entry.key.padRight(12)}: ');
+    try {
+      final res = await Process.run(entry.value.split(' ')[0], entry.value.split(' ').sublist(1), runInShell: true);
+      if (res.exitCode == 0) {
+        final version = res.stdout.toString().split('\n').first.trim();
+        print('${green}✅ Found ($version)$reset');
+      } else {
+        print('${red}❌ Error (Code ${res.exitCode})$reset');
+      }
+    } catch (_) {
+      print('${yellow}⚠️  Not found in PATH$reset');
+    }
+  }
   print('$bold${blue}-----------------------------------------------------------------------$reset\n');
 }
 
@@ -364,6 +406,7 @@ void main(List<String> args) async {
   if (args.contains('--install-desktop')) { await runDesktopInstall(); return; }
   if (args.contains('--update')) { await updateSweep(); return; }
   if (args.contains('--stats')) { await showDashboard(); return; }
+  if (args.contains('--doctor')) { await runDoctor(); return; }
 
   final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '';
   final config = await Config.load();
@@ -397,17 +440,20 @@ void main(List<String> args) async {
     print('${gray}Performing Smart Deep Scan...$reset');
     final allItems = <CleanupItem>[];
     
-    final sysMaintenance = [
-      CleanupItem(label: 'Homebrew Upgrade', category: 'SYSTEM MAINTENANCE', command: 'brew update && brew upgrade'),
-      CleanupItem(label: 'Docker System Prune', category: 'SYSTEM MAINTENANCE', command: 'docker system prune -f'),
-      CleanupItem(label: 'NPM Global Update', category: 'SYSTEM MAINTENANCE', command: 'npm install -g npm@latest'),
-    ];
-    for (var item in sysMaintenance) { allItems.add(item); }
+    // System Maintenance items
+    allItems.add(CleanupItem(label: 'Homebrew Upgrade', category: 'SYSTEM MAINTENANCE', command: 'brew update && brew upgrade'));
+    allItems.add(CleanupItem(label: 'Docker System Prune', category: 'SYSTEM MAINTENANCE', command: 'docker system prune -f'));
+    allItems.add(CleanupItem(label: 'NPM Global Update', category: 'SYSTEM MAINTENANCE', command: 'npm install -g npm@latest'));
 
+    // IDE Caches (New Architect Feature)
     if (Platform.isMacOS) {
-      allItems.add(CleanupItem(label: 'Xcode DerivedData', category: 'GLOBAL CACHES', path: '$home/Library/Developer/Xcode/DerivedData'));
-      allItems.add(CleanupItem(label: 'Xcode Tool Caches', category: 'GLOBAL CACHES', path: '$home/Library/Caches/com.apple.dt.Xcode'));
-      allItems.add(CleanupItem(label: 'iOS Simulators', category: 'GLOBAL CACHES', command: 'xcrun simctl delete unavailable'));
+      allItems.add(CleanupItem(label: 'Xcode DerivedData', category: 'IDE CACHES', path: '$home/Library/Developer/Xcode/DerivedData', note: 'Standard iOS build artifacts.'));
+      allItems.add(CleanupItem(label: 'Xcode Tool Caches', category: 'IDE CACHES', path: '$home/Library/Caches/com.apple.dt.Xcode'));
+      allItems.add(CleanupItem(label: 'VS Code Workspace Storage', category: 'IDE CACHES', path: '$home/Library/Application Support/Code/User/workspaceStorage', note: 'Can hide 10GB+ of old project data.'));
+      allItems.add(CleanupItem(label: 'Android Studio Logs', category: 'IDE CACHES', path: '$home/Library/Logs/Google/AndroidStudio*'));
+    } else if (Platform.isWindows) {
+      allItems.add(CleanupItem(label: 'VS Code Cache', category: 'IDE CACHES', path: '$home/AppData/Roaming/Code/Cache'));
+      allItems.add(CleanupItem(label: 'Android Studio System', category: 'IDE CACHES', path: '$home/AppData/Local/Google/AndroidStudio*'));
     }
 
     final Map<Framework, List<CleanupItem>> frameworkProjects = {};
@@ -463,11 +509,9 @@ void main(List<String> args) async {
     final stack = <List<CleanupItem>>[];
     final cursorStack = <int>[];
     SystemStats sysStats = SystemStats.empty();
-    Timer.periodic(const Duration(seconds: 5), (t) async {
-      sysStats = await getSystemStats();
-    });
-    // Initial fetch
-    sysStats = await getSystemStats();
+    
+    getSystemStats().then((s) => sysStats = s);
+    final statsTimer = Timer.periodic(const Duration(seconds: 5), (t) async { sysStats = await getSystemStats(); });
 
     stdin.lineMode = false; stdin.echoMode = false;
     bool actionConfirmed = false;
@@ -497,11 +541,12 @@ void main(List<String> args) async {
 
       final byte = stdin.readByteSync();
       if (byte == 27) {
-        if (stdin.readByteSync() == 91) {
+        final n1 = stdin.readByteSync(); 
+        if (n1 == 91) {
           final n2 = stdin.readByteSync();
           if (n2 == 65) cursor = (cursor - 1 + currentList.length) % currentList.length;
           else if (n2 == 66) cursor = (cursor + 1) % currentList.length;
-        } else { stdin.lineMode = true; stdin.echoMode = true; return; }
+        } else { statsTimer.cancel(); stdin.lineMode = true; stdin.echoMode = true; return; }
       } else if (byte == 32) {
         currentList[cursor].selected = !currentList[cursor].selected;
         if (currentList[cursor].isBatch && currentList[cursor].subItems != null) for (var s in currentList[cursor].subItems!) s.selected = currentList[cursor].selected;
@@ -525,9 +570,12 @@ void main(List<String> args) async {
         if (stack.isNotEmpty) { currentList = stack.removeLast(); cursor = cursorStack.removeLast(); }
         else break;
       } else if (byte == 120 || byte == 88) actionConfirmed = true;
-      else if (byte == 113 || byte == 81) { stdin.lineMode = true; stdin.echoMode = true; return; }
+      else if (byte == 113 || byte == 81) { statsTimer.cancel(); stdin.lineMode = true; stdin.echoMode = true; return; }
     }
+    statsTimer.cancel();
     stdin.lineMode = true; stdin.echoMode = true;
+
+    if (!actionConfirmed) continue;
 
     print('\n$bold${cyan}🚀 Executing Cleanup...$reset\n');
     final selected = <CleanupItem>[];
@@ -536,18 +584,17 @@ void main(List<String> args) async {
     }
     collect(allItems);
 
+    // Sort selected by size to show "Wall of Shame" during cleanup
+    selected.sort((a, b) => parseSizeToMb(b.estimatedSize).compareTo(parseSizeToMb(a.estimatedSize)));
+
     int completed = 0; double reclaimedMb = 0;
     for (var item in selected) {
       showProgressBar(completed, selected.length, status: item.label);
       if (!dryRun) {
         if (item.maintainSelected && item.upgradeCommand != null) await Process.run(item.upgradeCommand!.split(' ')[0], item.upgradeCommand!.split(' ').sublist(1), workingDirectory: item.path, runInShell: true);
         if (item.selected) {
-          if (item.command != null) {
-            final cmd = item.category == 'GIT HYGIENE' ? 'bash' : item.command!;
-            final args = item.category == 'GIT HYGIENE' ? ['-c', item.command!] : <String>[];
-            await Process.run(cmd, args, workingDirectory: item.category.startsWith('BIG FILES') ? null : item.path, runInShell: true);
-            if (item.category.startsWith('BIG FILES')) { try { File(item.path!).deleteSync(); } catch (_) {} }
-          } else if (item.path != null) { 
+          if (item.command != null) await Process.run(item.command!.split(' ')[0], item.command!.split(' ').sublist(1), workingDirectory: item.path, runInShell: true);
+          else if (item.path != null) { 
             if (FileSystemEntity.isDirectorySync(item.path!)) Directory(item.path!).deleteSync(recursive: true);
             else File(item.path!).deleteSync();
           }
@@ -556,7 +603,12 @@ void main(List<String> args) async {
       completed++; reclaimedMb += parseSizeToMb(item.estimatedSize);
     }
     if (!dryRun) { final s = await Stats.load(); s.addRecord(reclaimedMb); s.save(); }
+    
     print('\n\n$bold$green✨ DONE! Total reclaimed ${formatMb(reclaimedMb)}.$reset');
+    print('\n$bold${white}🏆 Wall of Shame (Largest Projects Cleaned):$reset');
+    for (var i = 0; i < (selected.length < 3 ? selected.length : 3); i++) {
+      print('  $red${i+1}. ${selected[i].label}$reset - ${selected[i].estimatedSize}');
+    }
     stdin.readLineSync(); return;
   }
 }
