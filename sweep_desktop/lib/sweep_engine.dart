@@ -31,16 +31,19 @@ class CleanupItem {
   final String label;
   final String category;
   final String? path;
+  final List<String>? batchPaths;
   final String? command;
   final String? upgradeCommand;
   final String? warning;
   final String? note;
   bool selected = false;
   bool maintainSelected = false;
+  bool archiveSelected = false;
   final bool isBatch;
   String? estimatedSize;
   DateTime? lastModified;
   List<CleanupItem>? subItems;
+  bool isDirty = false;
 
   CleanupItem({
     required this.label,
@@ -54,6 +57,7 @@ class CleanupItem {
     this.estimatedSize,
     this.lastModified,
     this.subItems,
+    this.batchPaths,
   });
 
   bool get isStale => lastModified != null && DateTime.now().difference(lastModified!).inDays > 30;
@@ -134,15 +138,14 @@ class SweepEngine {
             if (parts.length > 3) storage = parts[3];
           }
         }
-        // Using simpler grep/awk for macOS
         final memRes = await Process.run('bash', ['-c', "top -l 1 | grep 'PhysMem'"]);
         if (memRes.exitCode == 0) {
-          final match = RegExp(r'PhysMem: ([\w\d]+) used').firstMatch(memRes.stdout.toString());
+          final match = RegExp(r'PhysMem:\s*([\w\d]+)\s*used').firstMatch(memRes.stdout.toString());
           if (match != null) ram = match.group(1)!;
         }
         final cpuRes = await Process.run('bash', ['-c', "top -l 1 | grep 'CPU usage'"]);
         if (cpuRes.exitCode == 0) {
-          final match = RegExp(r'CPU usage: ([\d\.]+)% user').firstMatch(cpuRes.stdout.toString());
+          final match = RegExp(r'CPU usage:\s*([\d\.]+)%\s*user').firstMatch(cpuRes.stdout.toString());
           if (match != null) cpu = '${match.group(1)}%';
         }
       } else if (Platform.isWindows) {
@@ -152,22 +155,10 @@ class SweepEngine {
         if (memRes.exitCode == 0) ram = '${memRes.stdout.toString().trim()} GB used';
         final cpuRes = await Process.run('powershell', ['-Command', "(Get-CimInstance Win32_Processor).LoadPercentage"]);
         if (cpuRes.exitCode == 0) cpu = '${cpuRes.stdout.toString().trim()}%';
-      } else if (Platform.isLinux) {
-        final diskRes = await Process.run('df', ['-h', '/']);
-        if (diskRes.exitCode == 0) storage = diskRes.stdout.toString().split('\n')[1].split(RegExp(r'\s+'))[3];
-        final memRes = await Process.run('bash', ['-c', "free -h | awk 'NR==2{print \$3}'"]);
-        if (memRes.exitCode == 0) ram = memRes.stdout.toString().trim();
-        final cpuRes = await Process.run('bash', ['-c', "top -bn1 | grep 'Cpu(s)' | awk '{print \$2}'"]);
-        if (cpuRes.exitCode == 0) cpu = '${cpuRes.stdout.toString().trim()}%';
       }
     } catch (_) {}
 
-    return SystemStats(
-      osName: '${os[0].toUpperCase()}${os.substring(1)} ($version)',
-      storageLeft: storage,
-      ramUsage: ram,
-      cpuUsage: cpu,
-    );
+    return SystemStats(osName: '${os[0].toUpperCase()}${os.substring(1)} ($version)', storageLeft: storage, ramUsage: ram, cpuUsage: cpu);
   }
 
   static Future<List<CleanupItem>> scan(String pathString, List<String> ignoredPaths) async {
@@ -223,8 +214,18 @@ class SweepEngine {
             fw.detected = true;
             final pPath = entity.parent.path;
             if (frameworkProjects[fw]?.any((i) => i.path == pPath) ?? false) continue;
+            
+            bool dirty = false;
+            final gitDir = Directory('$pPath/.git');
+            if (gitDir.existsSync()) {
+              final gitRes = await Process.run('git', ['status', '--porcelain'], workingDirectory: pPath);
+              if (gitRes.stdout.toString().trim().isNotEmpty) dirty = true;
+            }
+
             final lastMod = entity.lastModifiedSync();
-            frameworkProjects.putIfAbsent(fw, () => []).add(CleanupItem(label: pPath.split(Platform.pathSeparator).last, category: '${fw.name.toUpperCase()} PROJECTS', path: pPath, command: fw.command, upgradeCommand: fw.upgradeCommand, lastModified: lastMod, note: 'Last touched: ${lastMod.day}/${lastMod.month}/${lastMod.year}'));
+            final pItem = CleanupItem(label: pPath.split(Platform.pathSeparator).last, category: '${fw.name.toUpperCase()} PROJECTS', path: pPath, command: fw.command, upgradeCommand: fw.upgradeCommand, lastModified: lastMod, note: 'Last touched: ${lastMod.day}/${lastMod.month}/${lastMod.year}');
+            pItem.isDirty = dirty;
+            frameworkProjects.putIfAbsent(fw, () => []).add(pItem);
           }
         }
       }
