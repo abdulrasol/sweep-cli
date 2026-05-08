@@ -88,11 +88,9 @@ void showProgressBar(int current, int total, {String? status}) {
   stdout.write('\r$bar ${bold}${(percent * 100).toStringAsFixed(1)}%$reset ${gray}${status ?? ''}$reset');
 }
 
-// HIGH PERFORMANCE SIZE CALCULATION
 Future<String?> getDirSize(String path) async {
   try {
     if (Platform.isWindows) {
-      // Use much faster PowerShell logic with error silencing
       final result = await Process.run('powershell', [
         '-NoProfile',
         '-NonInteractive',
@@ -211,10 +209,13 @@ Future<void> showHelp() async {
   print(' $bold${white}📖 Sweep CLI: Help & Usage Guide$reset');
   print('$bold${blue}-----------------------------------------------------------------------$reset');
   print(' ${bold}${cyan}Flags:$reset');
-  print('   ${yellow}--install$reset  : Compiles and installs sweep as a global binary.');
-  print('   ${yellow}--update$reset   : Automatically updates to the latest version.');
-  print('   ${yellow}--stats$reset    : Views your lifetime storage savings dashboard.');
-  print('   ${yellow}-h, --help$reset : Shows this help guide.');
+  print('   ${yellow}--install         $reset : Installs sweep as a global binary.');
+  print('   ${yellow}--uninstall       $reset : Removes the global sweep binary.');
+  print('   ${yellow}--build-desktop   $reset : Compiles the Flutter Desktop application.');
+  print('   ${yellow}--install-desktop $reset : Builds and installs the Desktop app to your system.');
+  print('   ${yellow}--update          $reset : Automatically updates to the latest version.');
+  print('   ${yellow}--stats           $reset : Views your lifetime storage savings dashboard.');
+  print('   ${yellow}-h, --help        $reset : Shows this help guide.');
   print('');
   print(' ${bold}${cyan}Keyboard Shortcuts (Inside Console):$reset');
   print('   ${bold}Arrows ↑/↓$reset  : Navigate the list (Scrolls automatically)');
@@ -229,18 +230,77 @@ Future<void> showHelp() async {
   print('$bold${blue}-----------------------------------------------------------------------$reset\n');
 }
 
+Future<void> runInstallation() async {
+  final binaryName = Platform.isWindows ? 'sweep.exe' : 'sweep';
+  print('Compiling to $binaryName...');
+  final res = await Process.run('dart', ['compile', 'exe', Platform.script.toFilePath(), '-o', binaryName]);
+  if (res.exitCode == 0) {
+    if (Platform.isWindows) print('Success! Add the folder containing $binaryName to your PATH.');
+    else { await Process.run('sudo', ['mv', binaryName, '/usr/local/bin/sweep'], runInShell: true); print('Success! Run using "sweep".'); }
+  } else { print('Failed: ${res.stderr}'); }
+}
+
+Future<void> runUninstall() async {
+  print('Removing global sweep binary...');
+  if (Platform.isWindows) {
+    print('Please manually delete sweep.exe from your PATH folder.');
+  } else {
+    final res = await Process.run('sudo', ['rm', '/usr/local/bin/sweep'], runInShell: true);
+    if (res.exitCode == 0) print('Success! Sweep has been uninstalled.');
+    else print('Failed to uninstall: ${res.stderr}');
+  }
+}
+
+Future<void> runDesktopBuild() async {
+  print('Building Sweep Desktop Application...');
+  final desktopDir = Directory('${Directory(Platform.script.toFilePath()).parent.path}/sweep_desktop');
+  if (!desktopDir.existsSync()) {
+    print('Error: sweep_desktop folder not found.'); return;
+  }
+  
+  String platform = Platform.isMacOS ? 'macos' : Platform.isWindows ? 'windows' : 'linux';
+  final res = await Process.run('flutter', ['build', platform], workingDirectory: desktopDir.path, runInShell: true);
+  
+  if (res.exitCode == 0) {
+    print('Success! Desktop build completed.');
+    print('Location: sweep_desktop/build/$platform/Build/Products/Release/ (or similar)');
+  } else {
+    print('Failed to build desktop app: ${res.stderr}');
+  }
+}
+
+Future<void> runDesktopInstall() async {
+  await runDesktopBuild();
+  if (Platform.isMacOS) {
+    print('Installing to Applications...');
+    await Process.run('cp', ['-R', 'sweep_desktop/build/macos/Build/Products/Release/sweep_desktop.app', '/Applications/'], runInShell: true);
+    print('Success! Sweep Desktop is now in your Applications folder.');
+  } else {
+    print('Automatic installation only supported on macOS for now. Please move the built binary manually.');
+  }
+}
+
+Future<void> updateSweep() async {
+  print('Updating Sweep CLI...');
+  try {
+    final client = HttpClient();
+    final request = await client.getUrl(Uri.parse('https://raw.githubusercontent.com/abdulrasol/sweep-cli/main/sweep.dart'));
+    final response = await request.close();
+    final contents = await response.transform(utf8.decoder).join();
+    final file = File(Platform.script.toFilePath());
+    file.writeAsStringSync(contents);
+    print('Update downloaded. Re-installing binary...');
+    await runInstallation();
+  } catch (e) { print('Update failed: $e'); }
+}
+
 void main(List<String> args) async {
   if (args.contains('-h') || args.contains('--help')) { await showHelp(); return; }
-  if (args.contains('--install')) {
-    final binaryName = Platform.isWindows ? 'sweep.exe' : 'sweep';
-    print('Compiling to $binaryName...');
-    final res = await Process.run('dart', ['compile', 'exe', Platform.script.toFilePath(), '-o', binaryName]);
-    if (res.exitCode == 0) {
-      if (Platform.isWindows) print('Success! Add the folder containing $binaryName to your PATH.');
-      else { await Process.run('sudo', ['mv', binaryName, '/usr/local/bin/sweep'], runInShell: true); print('Success! Run using "sweep".'); }
-    } else { print('Failed: ${res.stderr}'); }
-    return;
-  }
+  if (args.contains('--install')) { await runInstallation(); return; }
+  if (args.contains('--uninstall')) { await runUninstall(); return; }
+  if (args.contains('--build-desktop')) { await runDesktopBuild(); return; }
+  if (args.contains('--install-desktop')) { await runDesktopInstall(); return; }
+  if (args.contains('--update')) { await updateSweep(); return; }
   if (args.contains('--stats')) { await showDashboard(); return; }
 
   final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '';
@@ -249,10 +309,10 @@ void main(List<String> args) async {
   final frameworks = [
     Framework(name: 'Android Native', markers: ['build.gradle', 'build.gradle.kts'], cleanupLabel: 'Android Build', foldersToNuke: ['build', 'app/build', '.gradle'],
       globalCaches: [CleanupItem(label: 'Gradle Cache', category: 'ANDROID CACHES', path: '$home/.gradle/caches')]),
-    Framework(name: 'Flutter', markers: ['pubspec.yaml'], cleanupLabel: 'flutter clean', command: 'flutter clean', auditCommand: 'flutter pub outdated', upgradeCommand: 'flutter pub upgrade', foldersToNuke: ['android/.gradle', '.dart_tool', 'ios/Pods'],
+    Framework(name: 'Flutter', markers: ['pubspec.yaml'], cleanupLabel: 'flutter clean', command: 'flutter clean', auditCommand: 'flutter pub outdated', upgradeCommand: 'flutter pub upgrade', foldersToNuke: ['android/.gradle', '.dart_tool', 'ios/Pods', 'macos/Pods'],
       globalCaches: [CleanupItem(label: 'Dart Pub Cache', category: 'FLUTTER CACHES', path: '$home/.pub-cache'), CleanupItem(label: 'CocoaPods Cache', category: 'FLUTTER CACHES', path: '$home/Library/Caches/CocoaPods')]),
-    Framework(name: 'Node / React', markers: ['package.json'], cleanupLabel: 'node_modules', auditCommand: 'npm audit', upgradeCommand: 'npm update', foldersToNuke: ['node_modules', 'dist', 'build', '.next'],
-      globalCaches: [CleanupItem(label: 'NPM Cache', category: 'NODE CACHES', path: Platform.isWindows ? '$home/AppData/Roaming/npm-cache' : '$home/.npm/_cacache')]),
+    Framework(name: 'Node / React', markers: ['package.json'], cleanupLabel: 'node_modules', auditCommand: 'npm audit', upgradeCommand: 'npm update', foldersToNuke: ['node_modules', 'dist', 'build', '.next', '.nuxt', 'coverage'],
+      globalCaches: [CleanupItem(label: 'NPM Cache', category: 'NODE CACHES', path: Platform.isWindows ? '$home/AppData/Roaming/npm-cache' : '$home/.npm/_cacache'), CleanupItem(label: 'Bun Cache', category: 'NODE CACHES', path: '$home/.bun/install/cache')]),
     Framework(name: 'Python', markers: ['requirements.txt'], cleanupLabel: 'venv', foldersToNuke: ['venv', '.venv', '__pycache__']),
     Framework(name: 'Rust', markers: ['Cargo.toml'], cleanupLabel: 'cargo clean', command: 'cargo clean', foldersToNuke: ['target']),
     Framework(name: 'Go', markers: ['go.mod'], cleanupLabel: 'go clean', command: 'go clean -cache', foldersToNuke: ['bin']),
@@ -262,7 +322,7 @@ void main(List<String> args) async {
   while (true) {
     stdout.write('\x1B[2J\x1B[H');
     print('${blue}-----------------------------------------------------------------------$reset');
-    print(' $bold${white}🧹 Sweep CLI: Master Maintenance Suite v2.1$reset');
+    print(' $bold${white}🧹 Sweep CLI: Master Maintenance Suite v2.2$reset');
     print(' ${green}Powered and built by Abdulrasol with love of AI$reset');
     print('${blue}-----------------------------------------------------------------------$reset');
     stdout.write('$bold${white}Enter directory to scan [default: ${config.lastPath}]: $reset');
@@ -280,13 +340,11 @@ void main(List<String> args) async {
     final Map<Framework, List<CleanupItem>> frameworkProjects = {};
     final List<CleanupItem> bigFileItems = [];
 
-    // FAST ASYNC SCANNING
     final stream = scanDir.list(recursive: true, followLinks: false).handleError((_) {});
     await for (var entity in stream) {
       if (config.ignoredPaths.any((p) => entity.path.startsWith(p))) continue;
       if (entity is File) {
         final fileName = entity.path.split(Platform.pathSeparator).last;
-        // Big File Check (Sampled check for speed)
         if (entity.path.contains(Platform.pathSeparator)) {
            try {
              if (entity.lengthSync() > 100 * 1024 * 1024) {
@@ -314,7 +372,6 @@ void main(List<String> args) async {
     allItems.addAll(bigFileItems);
 
     print('${gray}Calculating sizes (Parallel)...$reset');
-    // Limit concurrency to 5 at a time to prevent Windows disk lock-up
     for (var i = 0; i < allItems.length; i += 5) {
       final chunk = allItems.skip(i).take(5);
       await Future.wait(chunk.map((item) async {
@@ -341,7 +398,7 @@ void main(List<String> args) async {
       print(' $bold${white}Sweep Master Maintenance Console$reset');
       print('${blue}-----------------------------------------------------------------------$reset');
       print(' ${bold}↑/↓$reset Nav | ${bold}Space$reset Toggle | ${bold}Enter$reset Open/Run | ${bold}M$reset Maintenance');
-      print(' ${bold}I$reset Ignore | ${bold}D$reset Dry Run | ${bold}X$reset Execute | ${bold}B$reset Back | ${bold}Q/ESC$reset Exit');
+      print(' ${bold}I$reset Ignore | ${bold}D$reset Dry Run | ${bold}X/Enter$reset Execute | ${bold}B$reset Back | ${bold}Q/ESC$reset Exit');
       print('${blue}-----------------------------------------------------------------------$reset');
       if (cursor < scrollOffset) scrollOffset = cursor;
       if (cursor >= scrollOffset + 12) scrollOffset = cursor - 12 + 1;
@@ -371,7 +428,11 @@ void main(List<String> args) async {
         if (currentList[cursor].isBatch && currentList[cursor].subItems != null) {
           stack.add(currentList); cursorStack.add(cursor);
           currentList = currentList[cursor].subItems!; cursor = 0; scrollOffset = 0;
-        } else { actionConfirmed = true; }
+        } else {
+          final anySelected = allItems.any((i) => i.selected || i.maintainSelected || (i.subItems?.any((s) => s.selected || s.maintainSelected) ?? false));
+          if (anySelected) actionConfirmed = true;
+          else currentList[cursor].selected = !currentList[cursor].selected;
+        }
       } else if (byte == 109 || byte == 77) {
         if (currentList[cursor].upgradeCommand != null) {
           currentList[cursor].maintainSelected = !currentList[cursor].maintainSelected;
@@ -410,7 +471,7 @@ void main(List<String> args) async {
       completed++; reclaimedMb += parseSizeToMb(item.estimatedSize);
     }
     if (!dryRun) { final s = await Stats.load(); s.addRecord(reclaimedMb); s.save(); }
-    print('\n\n$bold$green✨ DONE! Reclaimed ${formatMb(reclaimedMb)}.$reset');
+    print('\n\n$bold$green✨ DONE! Total reclaimed ${formatMb(reclaimedMb)}.$reset');
     stdin.readLineSync(); return;
   }
 }
