@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:io';
+import 'package:file_picker/file_picker.dart';
 import 'sweep_engine.dart';
 
 void main() {
@@ -54,6 +55,17 @@ class _MainScreenState extends State<MainScreen> {
     });
   }
 
+  Future<void> _pickDirectory() async {
+    // FIX: Using the correct API for newer versions of file_picker
+    String? selectedDirectory = await FilePicker.platform.getDirectoryPath();
+    if (selectedDirectory != null) {
+      setState(() {
+        _pathController.text = selectedDirectory;
+      });
+      _scan(); // Auto-scan after picking
+    }
+  }
+
   Future<void> _scan() async {
     if (_pathController.text.isEmpty) return;
     setState(() {
@@ -106,7 +118,6 @@ class _MainScreenState extends State<MainScreen> {
     void collect(List<CleanupItem> list) {
       for (var i in list) {
         if (i.isBatch && i.subItems != null) {
-          // Collect only selected sub-items if it's a batch
           for (var s in i.subItems!) {
             if (s.selected || s.maintainSelected) selectedTasks.add(s);
           }
@@ -147,9 +158,7 @@ class _MainScreenState extends State<MainScreen> {
             }
           }
         }
-      } catch (e) {
-        // Log error or show in status
-      }
+      } catch (e) {}
 
       completed++;
       _totalReclaimedMb += SweepEngine.parseSizeToMb(item.estimatedSize);
@@ -187,7 +196,6 @@ class _MainScreenState extends State<MainScreen> {
         ),
         child: Column(
           children: [
-            // Header: Path Selection
             Padding(
               padding: const EdgeInsets.all(24.0),
               child: Row(
@@ -197,8 +205,13 @@ class _MainScreenState extends State<MainScreen> {
                       controller: _pathController,
                       decoration: InputDecoration(
                         labelText: 'Source Directory',
-                        hintText: 'Enter path to scan...',
+                        hintText: 'Enter path or use picker...',
                         prefixIcon: const Icon(Icons.folder_open, color: Colors.cyan),
+                        suffixIcon: IconButton(
+                          icon: const Icon(Icons.search),
+                          tooltip: 'Choose Directory',
+                          onPressed: _pickDirectory,
+                        ),
                         filled: true,
                         fillColor: Colors.white.withOpacity(0.05),
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
@@ -220,8 +233,6 @@ class _MainScreenState extends State<MainScreen> {
                 ],
               ),
             ),
-
-            // Main List
             Expanded(
               child: _items.isEmpty
                   ? Center(
@@ -260,8 +271,6 @@ class _MainScreenState extends State<MainScreen> {
                       }).toList(),
                     ),
             ),
-
-            // Progress/Status Overlay
             if (_isCleaning)
               Container(
                 padding: const EdgeInsets.all(24),
@@ -286,8 +295,6 @@ class _MainScreenState extends State<MainScreen> {
                   ],
                 ),
               ),
-
-            // Footer
             Container(
               padding: const EdgeInsets.all(32),
               decoration: BoxDecoration(
