@@ -130,6 +130,7 @@ class SweepEngine {
 
     try {
       if (Platform.isMacOS) {
+        // Disk
         final diskRes = await Process.run('df', ['-h', '/']);
         if (diskRes.exitCode == 0) {
           final lines = diskRes.stdout.toString().split('\n');
@@ -138,27 +139,46 @@ class SweepEngine {
             if (parts.length > 3) storage = parts[3];
           }
         }
-        final memRes = await Process.run('bash', ['-c', "top -l 1 | grep 'PhysMem'"]);
-        if (memRes.exitCode == 0) {
-          final match = RegExp(r'PhysMem:\s*([\w\d]+)\s*used').firstMatch(memRes.stdout.toString());
-          if (match != null) ram = match.group(1)!;
+        
+        // RAM (Using memory_pressure and vm_stat for accuracy)
+        final vmStatRes = await Process.run('vm_stat', []);
+        if (vmStatRes.exitCode == 0) {
+          final lines = vmStatRes.stdout.toString().split('\n');
+          int pageSize = 4096;
+          int active = 0, wired = 0, compressed = 0;
+          for (var line in lines) {
+            if (line.contains('page size of')) pageSize = int.parse(line.split(' ').last.replaceAll('.', ''));
+            if (line.contains('Pages active:')) active = int.parse(line.split(':').last.trim().replaceAll('.', ''));
+            if (line.contains('Pages wired down:')) wired = int.parse(line.split(':').last.trim().replaceAll('.', ''));
+            if (line.contains('Pages occupied by compressor:')) compressed = int.parse(line.split(':').last.trim().replaceAll('.', ''));
+          }
+          final usedBytes = (active + wired + compressed) * pageSize;
+          ram = '${(usedBytes / (1024 * 1024 * 1024)).toStringAsFixed(1)}G';
         }
-        final cpuRes = await Process.run('bash', ['-c', "top -l 1 | grep 'CPU usage'"]);
+
+        // CPU (Faster top command)
+        final cpuRes = await Process.run('bash', ['-c', "top -l 1 -n 0 | grep 'CPU usage'"]);
         if (cpuRes.exitCode == 0) {
-          final match = RegExp(r'CPU usage:\s*([\d\.]+)%\s*user').firstMatch(cpuRes.stdout.toString());
+          final output = cpuRes.stdout.toString();
+          final match = RegExp(r'([\d\.]+)%\s*user').firstMatch(output);
           if (match != null) cpu = '${match.group(1)}%';
         }
       } else if (Platform.isWindows) {
         final diskRes = await Process.run('powershell', ['-Command', '[math]::round(((Get-PSDrive C).Free / 1GB), 1)']);
         if (diskRes.exitCode == 0) storage = '${diskRes.stdout.toString().trim()} GB';
-        final memRes = await Process.run('powershell', ['-Command', "[math]::round(((Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize - (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory) / 1MB, 1)"]);
-        if (memRes.exitCode == 0) ram = '${memRes.stdout.toString().trim()} GB used';
+        final memRes = await Process.run('powershell', ['-Command', "[math]::round(((Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize - (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory) / 1024 / 1024, 1)"]);
+        if (memRes.exitCode == 0) ram = '${memRes.stdout.toString().trim()}G';
         final cpuRes = await Process.run('powershell', ['-Command', "(Get-CimInstance Win32_Processor).LoadPercentage"]);
         if (cpuRes.exitCode == 0) cpu = '${cpuRes.stdout.toString().trim()}%';
       }
     } catch (_) {}
 
-    return SystemStats(osName: '${os[0].toUpperCase()}${os.substring(1)} ($version)', storageLeft: storage, ramUsage: ram, cpuUsage: cpu);
+    return SystemStats(
+      osName: '${os[0].toUpperCase()}${os.substring(1)} ($version)',
+      storageLeft: storage,
+      ramUsage: ram,
+      cpuUsage: cpu,
+    );
   }
 
   static Future<List<CleanupItem>> scan(String pathString, List<String> ignoredPaths) async {
