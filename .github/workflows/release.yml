@@ -100,7 +100,8 @@ jobs:
       - name: Generate Global Checksums
         run: |
           cd artifacts
-          sha256sum * > checksums.txt
+          # Only run sha256sum on files, ignoring directories
+          find . -maxdepth 2 -type f ! -name "checksums.txt" -exec sha256sum {} + > checksums.txt
           echo "Final Release Checksums:"
           cat checksums.txt
         shell: bash
