@@ -34,8 +34,8 @@
 
 ### ⌨️ Phase 4: CLI 2.0 (Modern TUI)
 - [x] **Interactive Terminal:** Integrate `dart_console` for arrow-key navigation and list selection.
-- [ ] **Pre-Commit Hook:** Special mode to run a "quick sweep" as a Git hook.
-- [ ] **Terminal Dashboard:** ASCII-art version of the savings chart for CLI users.
+- [x] **Pre-Commit Hook:** Special mode to run a "quick sweep" as a Git hook.
+- [x] **Terminal Dashboard:** ASCII-art version of the savings chart for CLI users.
 
 ### 📦 Phase 5: Community & Distribution
 - [ ] **Homebrew (macOS/Linux):** Create a formal formula for `brew install sweep`.

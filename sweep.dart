@@ -27,23 +27,38 @@ String color(String text, ConsoleColor c, {bool isBold = false}) {
 
 Future<void> showDashboard() async {
   final stats = await Stats.load();
-  console.writeLine('\n' + color('-----------------------------------------------------------------------', ConsoleColor.blue, isBold: true));
-  console.writeLine(' ' + color('📊 Sweep Savings Dashboard', ConsoleColor.white, isBold: true));
+  final sysStats = await SweepEngine.getSystemStats();
+  
+  console.clearScreen();
+  console.resetCursorPosition();
+  
+  console.writeLine(color('-----------------------------------------------------------------------', ConsoleColor.blue, isBold: true));
+  console.writeLine(' ' + color('📊 Sweep Global Savings Intelligence', ConsoleColor.white, isBold: true));
   console.writeLine(color('-----------------------------------------------------------------------', ConsoleColor.blue, isBold: true));
   
   if (stats.history.isEmpty) {
-    console.writeLine(color(' No history found.', ConsoleColor.white));
-    return;
+    console.writeLine('\n' + color('  No historical data detected. Start cleaning to see your impact!', ConsoleColor.white));
+  } else {
+    final total = stats.history.values.fold(0.0, (a, b) => a + b);
+    console.writeLine('  ' + color('LIFETIME RECLAIMED:', ConsoleColor.cyan) + ' ' + color(SweepEngine.formatMb(total), ConsoleColor.green, isBold: true));
+    console.writeLine('  ' + color('CURRENT FREE SPACE:', ConsoleColor.cyan) + ' ' + color(sysStats.storageLeft, ConsoleColor.green));
+    console.writeLine('\n  ' + color('SAVINGS TIMELINE (Last 30 Days):', ConsoleColor.white, isBold: true));
+    
+    // Sort keys and take last 10
+    final sortedDates = stats.history.keys.toList()..sort();
+    final recentDates = sortedDates.length > 10 ? sortedDates.sublist(sortedDates.length - 10) : sortedDates;
+    
+    for (var date in recentDates) {
+      final mb = stats.history[date]!;
+      final barCount = (mb / 1024 * 15).clamp(1, 40).toInt();
+      final bar = color('█' * barCount, ConsoleColor.green);
+      console.writeLine('  ${color(date, ConsoleColor.white)} | ${SweepEngine.formatMb(mb).padLeft(10)} | $bar');
+    }
   }
 
-  stats.history.forEach((date, mb) {
-    final barCount = (mb / 1024 * 10).clamp(1, 40).toInt();
-    final bar = color('█' * barCount, ConsoleColor.green);
-    console.writeLine(' ${color(date, ConsoleColor.white, isBold: true)} | ${SweepEngine.formatMb(mb).padLeft(10)} | $bar');
-  });
-
-  final total = stats.history.values.fold(0.0, (a, b) => a + b);
-  console.writeLine('\n Lifetime Reclaimed: ${color(SweepEngine.formatMb(total), ConsoleColor.green)}\n');
+  console.writeLine('\n' + color('-----------------------------------------------------------------------', ConsoleColor.blue, isBold: true));
+  console.writeLine(color(' Press any key to return...', ConsoleColor.black));
+  console.readKey();
 }
 
 Future<void> showHelp() async {
@@ -58,6 +73,7 @@ Future<void> showHelp() async {
   console.writeLine('   ${color('--update', ConsoleColor.yellow)}          : Automatically updates to the latest version.');
   console.writeLine('   ${color('--stats', ConsoleColor.yellow)}           : Views your lifetime storage savings dashboard.');
   console.writeLine('   ${color('--doctor', ConsoleColor.yellow)}          : Runs a health check on your dev environment.');
+  console.writeLine('   ${color('--install-hook', ConsoleColor.yellow)}    : Installs a Git pre-commit hook in the current directory.');
   console.writeLine('   ${color('-h, --help', ConsoleColor.yellow)}        : Shows this help guide.');
   console.writeLine('');
   console.writeLine(' ${color('Keyboard Shortcuts (Inside Console):', ConsoleColor.cyan, isBold: true)}');
@@ -256,6 +272,27 @@ Categories=Utility;
   }
 }
 
+Future<void> runHookInstallation() async {
+  final gitDir = Directory('.git');
+  if (!gitDir.existsSync()) {
+    console.writeLine(color('Error: Not a Git repository.', ConsoleColor.red));
+    return;
+  }
+  
+  final hookFile = File('.git/hooks/pre-commit');
+  final hookContent = '''#!/bin/bash
+# Sweep Pre-Commit Hook
+echo "🧹 Running pre-commit Sweep..."
+sweep --quick
+''';
+  
+  hookFile.writeAsStringSync(hookContent);
+  if (!Platform.isWindows) {
+    await Process.run('chmod', ['+x', '.git/hooks/pre-commit']);
+  }
+  console.writeLine(color('✅ Pre-commit hook installed successfully!', ConsoleColor.green));
+}
+
 Future<void> updateSweep() async {
   console.writeLine('Updating Sweep CLI...');
   try {
@@ -278,9 +315,32 @@ void main(List<String> args) async {
   if (args.contains('--update')) { await updateSweep(); return; }
   if (args.contains('--stats')) { await showDashboard(); return; }
   if (args.contains('--doctor')) { await runDoctor(); return; }
+  if (args.contains('--install-hook')) { await runHookInstallation(); return; }
 
   final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '';
   final config = await Config.load();
+
+  if (args.contains('--quick')) {
+    console.writeLine(color('🚀 Running Quick Sweep...', ConsoleColor.cyan));
+    final items = await SweepEngine.scan('.', []);
+    int count = 0;
+    for (var item in items) {
+      if (item.category.contains('PROJECTS') && item.path != null) {
+        if (item.command != null) {
+          await Process.run(item.command!.split(' ')[0], item.command!.split(' ').sublist(1), workingDirectory: item.path, runInShell: true);
+        } else {
+          // Manual cleanup for core folders if no command
+          for (var folder in ['.dart_tool', 'node_modules', 'build', 'dist', 'target', 'bin', 'obj']) {
+            final dir = Directory('${item.path}${Platform.pathSeparator}$folder');
+            if (dir.existsSync()) dir.deleteSync(recursive: true);
+          }
+        }
+        count++;
+      }
+    }
+    console.writeLine(color('✨ Quick Sweep done! Cleaned $count project components.', ConsoleColor.green));
+    return;
+  }
 
   while (true) {
     console.clearScreen();
