@@ -66,6 +66,12 @@ jobs:
       - name: Build & Package Desktop
         run: |
           cd sweep_desktop
+          # Ensure icons are available for all packagers
+          mkdir -p macos/packaging/dmg/assets
+          cp assets/icon.png macos/packaging/dmg/assets/icon.png
+          mkdir -p linux/packaging/appimage/assets
+          cp assets/icon.png linux/packaging/appimage/assets/icon.png
+          
           # Create metainfo file for RPM
           cp linux/packaging/rpm/sweep.metainfo.xml .
           flutter pub global run flutter_distributor:main package --platform=${{ matrix.platform }} --targets=${{ matrix.targets }}
