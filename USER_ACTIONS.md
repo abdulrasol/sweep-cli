@@ -29,7 +29,13 @@ This file tracks the manual steps required from the repository owner to fully ac
 - [ ] **Install Hook:** In any of your local coding projects, run `sweep --install-hook`.
 - [ ] **Result:** This installs a pre-commit hook that automatically cleans your build artifacts before every commit, keeping your repositories small and clean.
 
+## 🤖 Advanced Optimization
+
+### 5. ⚡ Auto-Purge Mode
+- [ ] **Enable Auto-Purge:** In Desktop **Settings** -> **System Maintenance**, toggle "Auto-Purge Mode".
+- [ ] **Result:** Sweep will now automatically clean your project artifacts (like `node_modules` or `build/` folders) in the background whenever your disk space hits the threshold, without needing manual confirmation.
+
 ## 🚀 Future Maintenance
 
-### 5. 🏷 Tagging Protocol
+### 6. 🏷 Tagging Protocol
 - [ ] **Increment Versions:** Remember to push a new tag (e.g., `git tag v3.5.0 && git push origin v3.5.0`) whenever you want to trigger a new multi-platform build and GitHub Release.

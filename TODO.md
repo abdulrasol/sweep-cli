@@ -44,7 +44,7 @@
 - [ ] **Linux PPA:** Provide `.deb` and `.rpm` packages for major distros. (Covered by GitHub Releases now)
 
 ### 🤖 Phase 6: Advanced Optimization
-- [ ] **Auto-Purge Mode:** Add a setting for the Guardian to clean automatically when threshold is hit.
+- [x] **Auto-Purge Mode:** Added a setting for the Guardian to clean automatically when threshold is hit.
 - [ ] **Cloud Cache Support:** Clean remote build caches for Docker, Firebase, and AWS.
 - [ ] **AI File Hunter:** Use local model/logic to identify "likely useless" large files beyond build artifacts.
 - [ ] **Project Analytics:** Show which framework (e.g., Flutter vs. Node) is eating the most of your disk.

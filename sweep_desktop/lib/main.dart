@@ -108,6 +108,7 @@ class AppState extends ChangeNotifier {
   };
 
   bool guardianEnabled = true;
+  bool autoPurgeEnabled = false;
   double diskThreshold = 5.0; // 5GB default
 
   AppState(this._prefs) {
@@ -122,14 +123,43 @@ class AppState extends ChangeNotifier {
       if (!guardianEnabled) return;
       final freeGb = await SweepEngine.getDiskSpaceGb();
       if (freeGb < diskThreshold) {
-        final notification = LocalNotification(
-          title: "Sweep: Low Disk Space!",
-          body: "You have only ${freeGb.toStringAsFixed(1)}GB left. Run Sweep to reclaim space.",
-          actions: [LocalNotificationAction(text: "Launch Sweep")],
-        );
-        notification.show();
+        if (autoPurgeEnabled) {
+          _performAutoPurge();
+        } else {
+          final notification = LocalNotification(
+            title: "Sweep: Low Disk Space!",
+            body: "You have only ${freeGb.toStringAsFixed(1)}GB left. Run Sweep to reclaim space.",
+            actions: [LocalNotificationAction(text: "Launch Sweep")],
+          );
+          notification.show();
+        }
       }
     });
+  }
+
+  Future<void> _performAutoPurge() async {
+    final items = await SweepEngine.scan(scanPath, []);
+    final toPurge = items.where((i) => i.category.contains('PROJECTS')).toList();
+    for (var item in toPurge) {
+      if (item.isBatch && item.subItems != null) {
+        for (var sub in item.subItems!) sub.selected = true;
+      } else {
+        item.selected = true;
+      }
+    }
+    final reclaimed = await SweepEngine.performCleanup(toPurge);
+    if (reclaimed > 0) {
+      if (appStats != null) {
+        appStats!.addRecord(reclaimed);
+        appStats!.save();
+        await _loadHistory();
+      }
+      final notification = LocalNotification(
+        title: "Sweep: Auto-Purge Complete",
+        body: "Automatically reclaimed ${SweepEngine.formatMb(reclaimed)} to free up space.",
+      );
+      notification.show();
+    }
   }
 
   Future<void> _loadHistory() async {
@@ -140,6 +170,7 @@ class AppState extends ChangeNotifier {
   void _loadSettings() {
     scanPath = _prefs?.getString('scanPath') ?? Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '/';
     guardianEnabled = _prefs?.getBool('guardianEnabled') ?? true;
+    autoPurgeEnabled = _prefs?.getBool('autoPurgeEnabled') ?? false;
     diskThreshold = _prefs?.getDouble('diskThreshold') ?? 5.0;
 
     final modulesJson = _prefs?.getString('activeModules');
@@ -174,6 +205,12 @@ class AppState extends ChangeNotifier {
   void toggleGuardian() {
     guardianEnabled = !guardianEnabled;
     _prefs?.setBool('guardianEnabled', guardianEnabled);
+    notifyListeners();
+  }
+
+  void toggleAutoPurge() {
+    autoPurgeEnabled = !autoPurgeEnabled;
+    _prefs?.setBool('autoPurgeEnabled', autoPurgeEnabled);
     notifyListeners();
   }
 
@@ -271,32 +308,8 @@ class AppState extends ChangeNotifier {
 
     collect(detectedItems);
 
-    double totalReclaimed = 0;
-    int completed = 0;
-
-    for (var item in selected) {
-      status = 'Cleaning ${item.label}...';
-      progress = completed / selected.length;
-      notifyListeners();
-
-      try {
-        if (item.maintainSelected && item.upgradeCommand != null) {
-          await Process.run(item.upgradeCommand!.split(' ')[0], item.upgradeCommand!.split(' ').sublist(1), workingDirectory: item.path, runInShell: true);
-        }
-        if (item.selected) {
-          if (item.command != null) {
-            await Process.run(item.command!.split(' ')[0], item.command!.split(' ').sublist(1), workingDirectory: item.path, runInShell: true);
-          } else if (item.path != null) {
-            if (FileSystemEntity.isDirectorySync(item.path!))
-              await Directory(item.path!).delete(recursive: true);
-            else
-              await File(item.path!).delete();
-          }
-        }
-      } catch (_) {}
-      completed++;
-      totalReclaimed += SweepEngine.parseSizeToMb(item.estimatedSize);
-    }
+    status = 'Executing Purge Sequence...';
+    final totalReclaimed = await SweepEngine.performCleanup(selected);
 
     if (totalReclaimed > 0 && appStats != null) {
       appStats!.addRecord(totalReclaimed);
@@ -1267,6 +1280,19 @@ class SettingsPage extends StatelessWidget {
                 Switch(value: state.guardianEnabled, onChanged: (v) => state.toggleGuardian(), activeColor: theme.accentColor),
                 const SizedBox(width: 16),
                 Text(state.guardianEnabled ? 'Guardian Active' : 'Guardian Paused', style: TextStyle(color: theme.textSecondary)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 48),
+          _buildSettingRow(
+            theme,
+            'Auto-Purge Mode',
+            'Automatically clean project artifacts when disk space is low (Caches are skipped for safety).',
+            Row(
+              children: [
+                Switch(value: state.autoPurgeEnabled, onChanged: (v) => state.toggleAutoPurge(), activeColor: theme.accentColor),
+                const SizedBox(width: 16),
+                Text(state.autoPurgeEnabled ? 'Auto-Purge Enabled' : 'Auto-Purge Disabled', style: TextStyle(color: theme.textSecondary)),
               ],
             ),
           ),

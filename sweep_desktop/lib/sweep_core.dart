@@ -385,4 +385,28 @@ class SweepEngine {
     allItems.addAll(bigFileItems);
     return allItems;
   }
+
+  static Future<double> performCleanup(List<CleanupItem> items) async {
+    double totalReclaimed = 0;
+    for (var item in items) {
+      try {
+        if (item.maintainSelected && item.upgradeCommand != null) {
+          await Process.run(item.upgradeCommand!.split(' ')[0], item.upgradeCommand!.split(' ').sublist(1), workingDirectory: item.path, runInShell: true);
+        }
+        if (item.selected) {
+          if (item.command != null) {
+            await Process.run(item.command!.split(' ')[0], item.command!.split(' ').sublist(1), workingDirectory: item.path, runInShell: true);
+          } else if (item.path != null) {
+            if (FileSystemEntity.isDirectorySync(item.path!)) {
+              await Directory(item.path!).delete(recursive: true);
+            } else {
+              await File(item.path!).delete();
+            }
+          }
+        }
+        totalReclaimed += parseSizeToMb(item.estimatedSize);
+      } catch (_) {}
+    }
+    return totalReclaimed;
+  }
 }
