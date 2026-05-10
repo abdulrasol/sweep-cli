@@ -43,6 +43,7 @@ dependencies:
   system_tray: ^2.0.3
   window_manager: ^0.5.1
   provider: ^6.1.5+1
+  shared_preferences: ^2.5.5
 
 dev_dependencies:
   flutter_test:
@@ -85,3 +86,12 @@ flutter:
   # To add assets to your application, add an assets section, like this:
   assets:
     - assets/icon.png
+    - assets/frameworks/flutter.png
+    - assets/frameworks/nodejs.png
+    - assets/frameworks/rust.png
+    - assets/frameworks/python.png
+    - assets/frameworks/android.png
+    - assets/frameworks/php.png
+    - assets/frameworks/dotnet.png
+    - assets/frameworks/unreal.png
+    - assets/frameworks/ai.png

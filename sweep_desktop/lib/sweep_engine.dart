@@ -140,27 +140,36 @@ class SweepEngine {
           }
         }
         
-        // RAM (Using memory_pressure and vm_stat for accuracy)
+        // RAM (Using vm_stat for accurate used memory calculation)
         final vmStatRes = await Process.run('vm_stat', []);
         if (vmStatRes.exitCode == 0) {
-          final lines = vmStatRes.stdout.toString().split('\n');
+          final output = vmStatRes.stdout.toString();
+          final lines = output.split('\n');
           int pageSize = 4096;
           int active = 0, wired = 0, compressed = 0;
+          
+          final pageSizeMatch = RegExp(r'page size of (\d+) bytes').firstMatch(output);
+          if (pageSizeMatch != null) pageSize = int.parse(pageSizeMatch.group(1)!);
+
           for (var line in lines) {
-            if (line.contains('page size of')) pageSize = int.parse(line.split(' ').last.replaceAll('.', ''));
-            if (line.contains('Pages active:')) active = int.parse(line.split(':').last.trim().replaceAll('.', ''));
-            if (line.contains('Pages wired down:')) wired = int.parse(line.split(':').last.trim().replaceAll('.', ''));
-            if (line.contains('Pages occupied by compressor:')) compressed = int.parse(line.split(':').last.trim().replaceAll('.', ''));
+            final parts = line.split(':');
+            if (parts.length < 2) continue;
+            final key = parts[0].trim();
+            final val = int.tryParse(parts[1].trim().replaceAll('.', '')) ?? 0;
+
+            if (key == 'Pages active') active = val;
+            if (key == 'Pages wired down') wired = val;
+            if (key == 'Pages occupied by compressor') compressed = val;
           }
           final usedBytes = (active + wired + compressed) * pageSize;
-          ram = '${(usedBytes / (1024 * 1024 * 1024)).toStringAsFixed(1)}G';
+          ram = '${(usedBytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB used';
         }
 
-        // CPU (Faster top command)
-        final cpuRes = await Process.run('bash', ['-c', "top -l 1 -n 0 | grep 'CPU usage'"]);
+        // CPU (Using top command)
+        final cpuRes = await Process.run('top', ['-l', '1', '-n', '0']);
         if (cpuRes.exitCode == 0) {
           final output = cpuRes.stdout.toString();
-          final match = RegExp(r'([\d\.]+)%\s*user').firstMatch(output);
+          final match = RegExp(r'CPU usage:\s*([\d\.]+)%\s*user').firstMatch(output);
           if (match != null) cpu = '${match.group(1)}%';
         }
       } else if (Platform.isWindows) {
@@ -205,6 +214,25 @@ class SweepEngine {
         globalCaches: [CleanupItem(label: 'Go Mod Cache', category: 'GO CACHES', path: '$home/go/pkg/mod')]),
     ];
 
+    try {
+      final file = File('$home/.sweep_rules.json');
+      if (file.existsSync()) {
+        final List<dynamic> json = jsonDecode(file.readAsStringSync());
+        for (var f in json) {
+          frameworks.add(Framework(
+            name: f['name'] ?? 'Custom',
+            markers: List<String>.from(f['markers'] ?? []),
+            cleanupLabel: f['cleanupLabel'] ?? 'Clean',
+            command: f['command'],
+            auditCommand: f['auditCommand'],
+            upgradeCommand: f['upgradeCommand'],
+            foldersToNuke: List<String>.from(f['foldersToNuke'] ?? []),
+            isCustom: true,
+          ));
+        }
+      }
+    } catch (_) {}
+
     final allItems = <CleanupItem>[];
     allItems.add(CleanupItem(label: 'Homebrew Cache', category: 'GLOBAL OS CACHES', path: '$home/Library/Caches/Homebrew', note: 'Downloaded source/bottles. Re-downloaded when needed.'));
     allItems.add(CleanupItem(label: 'Docker System Prune', category: 'GLOBAL OS CACHES', command: 'docker system prune -f', note: 'Deletes all stopped containers, unused networks, and dangling images.'));
@@ -238,8 +266,12 @@ class SweepEngine {
             bool dirty = false;
             final gitDir = Directory('$pPath/.git');
             if (gitDir.existsSync()) {
-              final gitRes = await Process.run('git', ['status', '--porcelain'], workingDirectory: pPath);
-              if (gitRes.stdout.toString().trim().isNotEmpty) dirty = true;
+              try {
+                final gitRes = await Process.run('git', ['status', '--porcelain'], workingDirectory: pPath);
+                if (gitRes.stdout.toString().trim().isNotEmpty) dirty = true;
+              } catch (_) {
+                // Ignore permission/missing command errors in sandbox
+              }
             }
 
             final lastMod = entity.lastModifiedSync();

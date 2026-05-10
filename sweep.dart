@@ -330,22 +330,124 @@ Future<void> runUninstall() async {
   }
 }
 
+Future<bool> checkFlutterInstalled() async {
+  try {
+    final res = await Process.run('flutter', ['--version']);
+    return res.exitCode == 0;
+  } catch (_) {
+    return false;
+  }
+}
+
+Future<bool> promptInstallFlutter() async {
+  print('\n$red${bold}⚠️ Flutter SDK not found!$reset');
+  print('Building the Desktop app requires the Flutter SDK.');
+  stdout.write('${bold}Would you like to attempt automated installation? (y/n/skip): $reset');
+  final choice = stdin.readLineSync()?.toLowerCase();
+  
+  if (choice == 'y') {
+    print('\n${blue}Attempting automated installation...$reset');
+    if (Platform.isMacOS) {
+      print('Running: brew install --cask flutter');
+      final res = await Process.run('brew', ['install', '--cask', 'flutter'], runInShell: true);
+      if (res.exitCode == 0) return true;
+    } else if (Platform.isLinux) {
+      print('Running: sudo snap install flutter --classic');
+      final res = await Process.run('sudo', ['snap', 'install', 'flutter', '--classic'], runInShell: true);
+      if (res.exitCode == 0) return true;
+    } else if (Platform.isWindows) {
+      print('Running: choco install flutter');
+      final res = await Process.run('choco', ['install', 'flutter'], runInShell: true);
+      if (res.exitCode == 0) return true;
+    }
+    print('\n$yellow⚠️ Automated install failed or platform not supported.$reset');
+    print('Please install manually from: ${bold}https://docs.flutter.dev/get-started/install$reset');
+  }
+  return false;
+}
+
 Future<void> runDesktopBuild() async {
-  print('Building Sweep Desktop...');
+  if (!await checkFlutterInstalled()) {
+    if (!await promptInstallFlutter()) {
+      print('\n${yellow}Desktop installation skipped.$reset');
+      return;
+    }
+  }
+
+  print('\n$bold${blue}🚀 Initiating Sweep Desktop Build Sequence...$reset');
   final desktopDir = Directory('${Directory(Platform.script.toFilePath()).parent.path}/sweep_desktop');
   String platform = Platform.isMacOS ? 'macos' : Platform.isWindows ? 'windows' : 'linux';
-  final res = await Process.run('flutter', ['build', platform], workingDirectory: desktopDir.path, runInShell: true);
-  if (res.exitCode == 0) print('Success! Desktop build completed.');
-  else print('Failed: ${res.stderr}');
+  
+  print('${gray}Step 1/3: Resolving dependencies...$reset');
+  showProgressBar(1, 3, status: 'flutter pub get');
+  await Process.run('flutter', ['pub', 'get'], workingDirectory: desktopDir.path, runInShell: true);
+  
+  print('\n${gray}Step 2/3: Compiling native $platform bundle...$reset');
+  showProgressBar(2, 3, status: 'flutter build $platform');
+  
+  final process = await Process.start('flutter', ['build', platform], workingDirectory: desktopDir.path, runInShell: true);
+  
+  // Stream output to show logs
+  process.stdout.transform(utf8.decoder).listen((data) {
+    if (data.trim().isNotEmpty) stdout.write('  $gray[LOG]$reset ${data.trim()}\n');
+  });
+  
+  final exitCode = await process.exitCode;
+  
+  if (exitCode == 0) {
+    print('\n${gray}Step 3/3: Build successful!$reset');
+    showProgressBar(3, 3, status: 'Ready');
+    print('\n$green${bold}✅ Desktop build completed successfully.$reset');
+  } else {
+    print('\n$red${bold}❌ Build process failed (Exit Code: $exitCode).$reset');
+  }
 }
 
 Future<void> runDesktopInstall() async {
   await runDesktopBuild();
+  final projectDir = Directory(Platform.script.toFilePath()).parent.path;
+  final desktopDir = '$projectDir/sweep_desktop';
+  
+  print('\n$bold${blue}🚚 Finalizing Installation...$reset');
+  
   if (Platform.isMacOS) {
-    print('Installing to Applications...');
-    await Process.run('cp', ['-R', 'sweep_desktop/build/macos/Build/Products/Release/sweep.app', '/Applications/'], runInShell: true);
-    print('Success! Sweep is now in your Applications folder.');
-  } else { print('Auto-install only supported on macOS for now.'); }
+    print('${gray}Copying Sweep.app to /Applications...$reset');
+    showProgressBar(90, 100, status: 'Installing');
+    await Process.run('cp', ['-R', '$desktopDir/build/macos/Build/Products/Release/Sweep.app', '/Applications/'], runInShell: true);
+    print('\n$green${bold}✨ Success! Sweep is now in your Applications folder.$reset\n');
+  } else if (Platform.isWindows) {
+    print('${gray}Deploying Windows artifacts to AppData...$reset');
+    showProgressBar(90, 100, status: 'Installing');
+    final installDir = Directory('${Platform.environment['APPDATA']}\\Sweep');
+    if (!installDir.existsSync()) installDir.createSync(recursive: true);
+    
+    final buildDir = '$desktopDir\\build\\windows\\x64\\runner\\Release';
+    await Process.run('powershell', ['Copy-Item', '-Path', '"$buildDir\\*"', '-Destination', '"${installDir.path}"', '-Recurse', '-Force']);
+    
+    print('\n$green${bold}✨ Success! Sweep Desktop is installed in ${installDir.path}.$reset');
+    print('${yellow}Tip: Create a shortcut to ${installDir.path}\\sweep_desktop.exe to launch it easily.$reset\n');
+  } else if (Platform.isLinux) {
+    print('${gray}Installing Linux bundle and menu entry...$reset');
+    showProgressBar(90, 100, status: 'Installing');
+    final installDir = Directory('${Platform.environment['HOME']}/.local/share/sweep');
+    if (!installDir.existsSync()) installDir.createSync(recursive: true);
+    
+    final buildDir = '$desktopDir/build/linux/x64/release/bundle';
+    await Process.run('cp', ['-r', '$buildDir/.', installDir.path], runInShell: true);
+    
+    final desktopFile = File('${Platform.environment['HOME']}/.local/share/applications/sweep.desktop');
+    desktopFile.writeAsStringSync('''[Desktop Entry]
+Name=Sweep
+Comment=Master Maintenance Suite for Developers
+Exec=${installDir.path}/sweep_desktop
+Icon=${installDir.path}/data/flutter_assets/assets/icon.png
+Terminal=false
+Type=Application
+Categories=Utility;
+''');
+    
+    print('\n$green${bold}✨ Success! Sweep Desktop is installed and added to your application menu.$reset\n');
+  }
 }
 
 Future<void> updateSweep() async {
