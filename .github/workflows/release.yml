@@ -52,7 +52,7 @@ jobs:
       - name: Build & Package Desktop
         run: |
           cd sweep_desktop
-          flutter_distributor package --platform=${{ matrix.platform }} --targets=${{ matrix.targets }}
+          dart pub global run flutter_distributor package --platform=${{ matrix.platform }} --targets=${{ matrix.targets }}
         shell: bash
 
       - name: Upload Artifact
