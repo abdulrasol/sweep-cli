@@ -1,5 +1,4 @@
 name: sweep
-description: "Master Maintenance Suite for Developers"
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -20,7 +19,7 @@ version: 1.0.0+1
 
 maintainer:
   name: Abdulrasol
-  email: rasol@example.com # Update with your real email
+  email: [EMAIL_ADDRESS]
 
 description: "Master Maintenance Suite for Developers - Clean your workspace and reclaim storage."
 
