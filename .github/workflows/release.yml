@@ -44,6 +44,10 @@ jobs:
           sudo mv squashfs-root /opt/appimagetool
           sudo ln -s /opt/appimagetool/AppRun /usr/local/bin/appimagetool
 
+      - name: Install macOS dependencies
+        if: matrix.os == 'macos-latest'
+        run: sudo npm install -g appdmg
+
       - name: Get dependencies
         run: |
           cd sweep_desktop
