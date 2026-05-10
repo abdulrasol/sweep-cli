@@ -1,83 +1,10 @@
 import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
+import 'package:dart_console/dart_console.dart';
+import 'sweep_desktop/lib/sweep_core.dart';
 
-class Framework {
-  final String name;
-  final List<String> markers;
-  final String cleanupLabel;
-  final String? command;
-  final String? auditCommand;
-  final String? upgradeCommand;
-  final List<String> foldersToNuke;
-  final List<CleanupItem> globalCaches;
-  bool detected = false;
-  final bool isCustom;
-
-  Framework({
-    required this.name,
-    required this.markers,
-    required this.cleanupLabel,
-    this.command,
-    this.auditCommand,
-    this.upgradeCommand,
-    required this.foldersToNuke,
-    this.globalCaches = const [],
-    this.isCustom = false,
-  });
-}
-
-class CleanupItem {
-  final String label;
-  final String category;
-  final String? path;
-  final List<String>? batchPaths;
-  final String? command;
-  final String? upgradeCommand;
-  final String? warning;
-  final String? note;
-  bool selected = false;
-  bool maintainSelected = false;
-  bool archiveSelected = false;
-  final bool isBatch;
-  String? estimatedSize;
-  DateTime? lastModified;
-  List<CleanupItem>? subItems;
-  bool isDirty = false; // Uncommitted changes
-
-  CleanupItem({
-    required this.label,
-    required this.category,
-    this.path,
-    this.command,
-    this.upgradeCommand,
-    this.warning,
-    this.note,
-    this.isBatch = false,
-    this.estimatedSize,
-    this.lastModified,
-    this.subItems,
-    this.batchPaths,
-  });
-
-  bool get isStale => lastModified != null && DateTime.now().difference(lastModified!).inDays > 30;
-
-  String get displayPath => isBatch 
-      ? '${batchPaths?.length ?? 0} locations' 
-      : (path ?? command ?? '');
-}
-
-// ANSI Colors
-final bool useColor = !Platform.isWindows || (Platform.environment['TERM'] != null);
-final String reset = useColor ? '\x1B[0m' : '';
-final String bold = useColor ? '\x1B[1m' : '';
-final String red = useColor ? '\x1B[31m' : '';
-final String green = useColor ? '\x1B[32m' : '';
-final String yellow = useColor ? '\x1B[33m' : '';
-final String blue = useColor ? '\x1B[34m' : '';
-final String cyan = useColor ? '\x1B[36m' : '';
-final String white = useColor ? '\x1B[37m' : '';
-final String gray = useColor ? '\x1B[90m' : '';
+final console = Console();
 
 void showProgressBar(int current, int total, {String? status}) {
   const int width = 30;
@@ -86,247 +13,127 @@ void showProgressBar(int current, int total, {String? status}) {
   int completedWidth = (percent * width).round();
   int remainingWidth = width - completedWidth;
 
-  String bar = '$cyan[' + '=' * completedWidth + '>' + ' ' * (remainingWidth > 0 ? remainingWidth - 1 : 0) + ']$reset';
-  stdout.write('\r$bar ${bold}${(percent * 100).toStringAsFixed(1)}%$reset ${gray}${status ?? ''}$reset');
+  String bar = '${ConsoleColor.cyan.ansi}[${'=' * completedWidth}>${' ' * (remainingWidth > 0 ? remainingWidth - 1 : 0)}]${ConsoleColor.reset.ansi}';
+  stdout.write('\r$bar ${(percent * 100).toStringAsFixed(1)}% ${status ?? ''}');
 }
 
-Future<String?> getDirSize(String path) async {
-  try {
-    if (Platform.isWindows) {
-      final result = await Process.run('powershell', [
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        '([long](Get-ChildItem -Path "$path" -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum / 1MB)'
-      ]);
-      if (result.exitCode == 0) {
-        final val = double.tryParse(result.stdout.toString().trim());
-        if (val != null) return val < 1024 ? '${val.toStringAsFixed(1)}M' : '${(val/1024).toStringAsFixed(1)}G';
-      }
-    } else {
-      final result = await Process.run('du', ['-sh', path], runInShell: true);
-      if (result.exitCode == 0) return result.stdout.toString().split('\t').first.trim();
-    }
-  } catch (_) {}
-  return '0M';
-}
-
-Future<SystemStats> getSystemStats() async {
-  String os = Platform.operatingSystem;
-  String version = Platform.operatingSystemVersion;
-  String storage = '-';
-  String ram = '-';
-  String cpu = '-';
-
-  try {
-    if (Platform.isMacOS) {
-      final diskRes = await Process.run('df', ['-h', '/']);
-      if (diskRes.exitCode == 0) {
-        final lines = diskRes.stdout.toString().split('\n');
-        if (lines.length > 1) {
-          final parts = lines[1].split(RegExp(r'\s+'));
-          if (parts.length > 3) storage = parts[3];
-        }
-      }
-      final memRes = await Process.run('bash', ['-c', "top -l 1 | grep 'PhysMem'"]);
-      if (memRes.exitCode == 0) {
-        final match = RegExp(r'PhysMem:\s*([\w\d]+)\s*used').firstMatch(memRes.stdout.toString());
-        if (match != null) ram = match.group(1)!;
-      }
-      final cpuRes = await Process.run('bash', ['-c', "top -l 1 | grep 'CPU usage'"]);
-      if (cpuRes.exitCode == 0) {
-        final match = RegExp(r'CPU usage:\s*([\d\.]+)%\s*user').firstMatch(cpuRes.stdout.toString());
-        if (match != null) cpu = '${match.group(1)}%';
-      }
-    } else if (Platform.isWindows) {
-      final diskRes = await Process.run('powershell', ['-Command', '[math]::round(((Get-PSDrive C).Free / 1GB), 1)']);
-      if (diskRes.exitCode == 0) storage = '${diskRes.stdout.toString().trim()} GB';
-      final memRes = await Process.run('powershell', ['-Command', "[math]::round(((Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize - (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory) / 1MB, 1)"]);
-      if (memRes.exitCode == 0) ram = '${memRes.stdout.toString().trim()} GB used';
-      final cpuRes = await Process.run('powershell', ['-Command', "(Get-CimInstance Win32_Processor).LoadPercentage"]);
-      if (cpuRes.exitCode == 0) cpu = '${cpuRes.stdout.toString().trim()}%';
-    }
-  } catch (_) {}
-
-  return SystemStats(
-    osName: '${os[0].toUpperCase()}${os.substring(1)} ($version)',
-    storageLeft: storage,
-    ramUsage: ram,
-    cpuUsage: cpu,
-  );
-}
-
-double parseSizeToMb(String? sizeStr) {
-  if (sizeStr == null) return 0;
-  final regex = RegExp(r'^([\d\.]+)\s*([KMG])B?$');
-  final match = regex.firstMatch(sizeStr.trim().toUpperCase());
-  if (match == null) return 0;
-  double value = double.tryParse(match.group(1)!) ?? 0;
-  String unit = match.group(2)!;
-  switch (unit) {
-    case 'G': return value * 1024;
-    case 'M': return value;
-    case 'K': return value / 1024;
-    default: return value;
-  }
-}
-
-String formatMb(double mb) {
-  if (mb >= 1024) return '${(mb / 1024).toStringAsFixed(2)} GB';
-  return '${mb.toStringAsFixed(2)} MB';
-}
-
-class Config {
-  String lastPath = '.';
-  List<String> ignoredPaths = [];
-  static Future<Config> load() async {
-    final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '';
-    final file = File('$home/.sweep_cli_rc');
-    if (!file.existsSync()) return Config();
-    try {
-      final lines = file.readAsLinesSync();
-      final config = Config();
-      if (lines.isNotEmpty) config.lastPath = lines[0];
-      if (lines.length > 1) config.ignoredPaths = lines.sublist(1);
-      return config;
-    } catch (_) { return Config(); }
-  }
-  void save() {
-    final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '';
-    final file = File('$home/.sweep_cli_rc');
-    final buffer = StringBuffer()..writeln(lastPath);
-    for (var p in ignoredPaths) buffer.writeln(p);
-    file.writeAsStringSync(buffer.toString());
-  }
-}
-
-class Stats {
-  Map<String, double> history = {};
-  static Future<Stats> load() async {
-    final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '';
-    final file = File('$home/.sweep_stats.json');
-    if (!file.existsSync()) return Stats();
-    try {
-      final Map<String, dynamic> json = jsonDecode(file.readAsStringSync());
-      final stats = Stats();
-      json.forEach((k, v) => stats.history[k] = (v as num).toDouble());
-      return stats;
-    } catch (_) { return Stats(); }
-  }
-  void save() {
-    final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '';
-    final file = File('$home/.sweep_stats.json');
-    file.writeAsStringSync(jsonEncode(history));
-  }
-  void addRecord(double mb) {
-    if (mb <= 0) return;
-    final date = DateTime.now().toIso8601String().split('T')[0];
-    history[date] = (history[date] ?? 0) + mb;
-  }
-}
-
-class SystemStats {
-  final String osName;
-  final String storageLeft;
-  final String ramUsage;
-  final String cpuUsage;
-
-  SystemStats({
-    required this.osName,
-    required this.storageLeft,
-    required this.ramUsage,
-    required this.cpuUsage,
-  });
-
-  factory SystemStats.empty() => SystemStats(osName: 'Loading...', storageLeft: '-', ramUsage: '-', cpuUsage: '-');
+// Helper to wrap strings in ANSI colors using dart_console if possible
+String color(String text, ConsoleColor c, {bool isBold = false}) {
+  String result = c.ansi;
+  if (isBold) result += '\x1B[1m';
+  result += text + ConsoleColor.reset.ansi;
+  return result;
 }
 
 Future<void> showDashboard() async {
   final stats = await Stats.load();
-  print('\n$bold${blue}-----------------------------------------------------------------------$reset');
-  print(' $bold${white}📊 Sweep Savings Dashboard$reset');
-  print('$bold${blue}-----------------------------------------------------------------------$reset');
-  if (stats.history.isEmpty) { print('${gray}No history found.$reset'); return; }
-  stats.history.forEach((date, mb) {
-    final bar = '$green' + ('█' * (mb / 1024 * 10).clamp(1, 40).toInt()) + '$reset';
-    print(' $bold$date$reset | ${formatMb(mb).padLeft(10)} | $bar');
-  });
-  print('\n Lifetime Reclaimed: ${green}${formatMb(stats.history.values.fold(0, (a, b) => a + b))}$reset\n');
-}
+  console.writeLine('\n' + color('-----------------------------------------------------------------------', ConsoleColor.blue, isBold: true));
+  console.writeLine(' ' + color('📊 Sweep Savings Dashboard', ConsoleColor.white, isBold: true));
+  console.writeLine(color('-----------------------------------------------------------------------', ConsoleColor.blue, isBold: true));
+  
+  if (stats.history.isEmpty) {
+    console.writeLine(color(' No history found.', ConsoleColor.white));
+    return;
+  }
 
-void loadCustomFrameworks(List<Framework> frameworks) {
-  final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '';
-  final file = File('$home/.sweep_rules.json');
-  if (!file.existsSync()) return;
-  try {
-    final List<dynamic> json = jsonDecode(file.readAsStringSync());
-    for (var f in json) {
-      frameworks.add(Framework(name: f['name'] ?? 'Custom', markers: List<String>.from(f['markers'] ?? []), cleanupLabel: f['cleanupLabel'] ?? 'Clean',
-        command: f['command'], auditCommand: f['auditCommand'], upgradeCommand: f['upgradeCommand'], foldersToNuke: List<String>.from(f['foldersToNuke'] ?? []), isCustom: true));
-    }
-  } catch (_) {}
+  stats.history.forEach((date, mb) {
+    final barCount = (mb / 1024 * 10).clamp(1, 40).toInt();
+    final bar = color('█' * barCount, ConsoleColor.green);
+    console.writeLine(' ${color(date, ConsoleColor.white, isBold: true)} | ${SweepEngine.formatMb(mb).padLeft(10)} | $bar');
+  });
+
+  final total = stats.history.values.fold(0.0, (a, b) => a + b);
+  console.writeLine('\n Lifetime Reclaimed: ${color(SweepEngine.formatMb(total), ConsoleColor.green)}\n');
 }
 
 Future<void> showHelp() async {
-  print('\n$bold${blue}-----------------------------------------------------------------------$reset');
-  print(' $bold${white}📖 Sweep CLI: Help & Usage Guide$reset');
-  print('$bold${blue}-----------------------------------------------------------------------$reset');
-  print(' ${bold}${cyan}Flags:$reset');
-  print('   ${yellow}--install         $reset : Installs sweep as a global binary.');
-  print('   ${yellow}--uninstall       $reset : Removes the global sweep binary.');
-  print('   ${yellow}--build-desktop   $reset : Compiles the Flutter Desktop application.');
-  print('   ${yellow}--install-desktop $reset : Builds and installs the Desktop app to your system.');
-  print('   ${yellow}--update          $reset : Automatically updates to the latest version.');
-  print('   ${yellow}--stats           $reset : Views your lifetime storage savings dashboard.');
-  print('   ${yellow}--doctor          $reset : Runs a health check on your dev environment.');
-  print('   ${yellow}-h, --help        $reset : Shows this help guide.');
-  print('');
-  print(' ${bold}${cyan}Keyboard Shortcuts (Inside Console):$reset');
-  print('   ${bold}Arrows ↑/↓$reset  : Navigate the list (Scrolls automatically)');
-  print('   ${bold}Space$reset      : Toggle item for cleanup');
-  print('   ${bold}Enter$reset      : Open a batch sub-menu OR Run Cleanup (if selected)');
-  print('   ${bold}M$reset          : Toggle Maintenance [FIX] (Auto-upgrade deps)');
-  print('   ${bold}A$reset          : Toggle Archive (Zip project and move to Downloads)');
-  print('   ${bold}I$reset          : Add project to permanent Ignore list');
-  print('   ${bold}D$reset          : Toggle Dry Run mode (Simulation)');
-  print('   ${bold}1, 2, 3$reset    : Presets (1: Safe, 2: Deep, 3: Stale Nuke)');
-  print('   ${bold}X$reset          : Execute all selected tasks');
-  print('   ${bold}B$reset          : Go back from a sub-menu');
-  print('   ${bold}Q / ESC$reset    : Exit the tool');
-  print('$bold${blue}-----------------------------------------------------------------------$reset\n');
+  console.writeLine('\n' + color('-----------------------------------------------------------------------', ConsoleColor.blue, isBold: true));
+  console.writeLine(' ' + color('📖 Sweep CLI: Help & Usage Guide', ConsoleColor.white, isBold: true));
+  console.writeLine(color('-----------------------------------------------------------------------', ConsoleColor.blue, isBold: true));
+  console.writeLine(' ${color('Flags:', ConsoleColor.cyan, isBold: true)}');
+  console.writeLine('   ${color('--install', ConsoleColor.yellow)}         : Installs sweep as a global binary.');
+  console.writeLine('   ${color('--uninstall', ConsoleColor.yellow)}       : Removes the global sweep binary.');
+  console.writeLine('   ${color('--build-desktop', ConsoleColor.yellow)}   : Compiles the Flutter Desktop application.');
+  console.writeLine('   ${color('--install-desktop', ConsoleColor.yellow)} : Builds and installs the Desktop app to your system.');
+  console.writeLine('   ${color('--update', ConsoleColor.yellow)}          : Automatically updates to the latest version.');
+  console.writeLine('   ${color('--stats', ConsoleColor.yellow)}           : Views your lifetime storage savings dashboard.');
+  console.writeLine('   ${color('--doctor', ConsoleColor.yellow)}          : Runs a health check on your dev environment.');
+  console.writeLine('   ${color('-h, --help', ConsoleColor.yellow)}        : Shows this help guide.');
+  console.writeLine('');
+  console.writeLine(' ${color('Keyboard Shortcuts (Inside Console):', ConsoleColor.cyan, isBold: true)}');
+  console.writeLine('   ${color('Arrows ↑/↓', ConsoleColor.white, isBold: true)}  : Navigate the list');
+  console.writeLine('   ${color('Space', ConsoleColor.white, isBold: true)}      : Toggle item for cleanup');
+  console.writeLine('   ${color('Enter', ConsoleColor.white, isBold: true)}      : Open a batch sub-menu OR Run Cleanup (if selected)');
+  console.writeLine('   ${color('M', ConsoleColor.white, isBold: true)}          : Toggle Maintenance [FIX] (Auto-upgrade deps)');
+  console.writeLine('   ${color('A', ConsoleColor.white, isBold: true)}          : Toggle Archive (Zip and delete)');
+  console.writeLine('   ${color('I', ConsoleColor.white, isBold: true)}          : Add project to permanent Ignore list');
+  console.writeLine('   ${color('D', ConsoleColor.white, isBold: true)}          : Toggle Dry Run mode (Simulation)');
+  console.writeLine('   ${color('1, 2, 3', ConsoleColor.white, isBold: true)}    : Presets (1: Safe, 2: Deep, 3: Stale Nuke)');
+  console.writeLine('   ${color('X', ConsoleColor.white, isBold: true)}          : Execute all selected tasks');
+  console.writeLine('   ${color('B', ConsoleColor.white, isBold: true)}          : Go back from a sub-menu');
+  console.writeLine('   ${color('Q / ESC', ConsoleColor.white, isBold: true)}    : Exit the tool');
+  console.writeLine(color('-----------------------------------------------------------------------', ConsoleColor.blue, isBold: true) + '\n');
 }
 
 Future<void> runDoctor() async {
-  print('\n$bold${blue}-----------------------------------------------------------------------$reset');
-  print(' $bold${white}🩺 Sweep Environment Doctor$reset');
-  print('$bold${blue}-----------------------------------------------------------------------$reset');
-  final checks = { 'Dart': 'dart --version', 'Flutter': 'flutter --version', 'Node.js': 'node --version', 'NPM': 'npm --version', 'Python': 'python3 --version', 'Rust': 'rustc --version', 'Go': 'go version', 'Docker': 'docker --version', 'Homebrew': 'brew --version', 'Git': 'git --version' };
+  console.writeLine('\n' + color('-----------------------------------------------------------------------', ConsoleColor.blue, isBold: true));
+  console.writeLine(' ' + color('🩺 Sweep Environment Doctor', ConsoleColor.white, isBold: true));
+  console.writeLine(color('-----------------------------------------------------------------------', ConsoleColor.blue, isBold: true));
+  
+  final checks = {
+    'Dart': 'dart --version',
+    'Flutter': 'flutter --version',
+    'Node.js': 'node --version',
+    'NPM': 'npm --version',
+    'Python': 'python3 --version',
+    'Rust': 'rustc --version',
+    'Go': 'go version',
+    'Docker': 'docker --version',
+    'Homebrew': 'brew --version',
+    'Git': 'git --version'
+  };
+
   for (var entry in checks.entries) {
     stdout.write('${entry.key.padRight(12)}: ');
     try {
       final res = await Process.run(entry.value.split(' ')[0], entry.value.split(' ').sublist(1), runInShell: true);
-      if (res.exitCode == 0) { print('${green}✅ Found (${res.stdout.toString().split('\n').first.trim()})$reset'); }
-      else { print('${red}❌ Error (Code ${res.exitCode})$reset'); }
-    } catch (_) { print('${yellow}⚠️  Not found in PATH$reset'); }
+      if (res.exitCode == 0) {
+        console.writeLine(color('✅ Found (${res.stdout.toString().split('\n').first.trim()})', ConsoleColor.green));
+      } else {
+        console.writeLine(color('❌ Error (Code ${res.exitCode})', ConsoleColor.red));
+      }
+    } catch (_) {
+      console.writeLine(color('⚠️  Not found in PATH', ConsoleColor.yellow));
+    }
   }
 }
 
 Future<void> runInstallation() async {
   final binaryName = Platform.isWindows ? 'sweep.exe' : 'sweep';
-  print('Compiling to $binaryName...');
+  console.writeLine('Compiling to $binaryName...');
   final res = await Process.run('dart', ['compile', 'exe', Platform.script.toFilePath(), '-o', binaryName]);
   if (res.exitCode == 0) {
-    if (Platform.isWindows) print('Success! Add the folder containing $binaryName to your PATH.');
-    else { await Process.run('sudo', ['mv', binaryName, '/usr/local/bin/sweep'], runInShell: true); print('Success! Run using "sweep".'); }
-  } else { print('Failed: ${res.stderr}'); }
+    if (Platform.isWindows) {
+      console.writeLine(color('Success! Add the folder containing $binaryName to your PATH.', ConsoleColor.green));
+    } else {
+      await Process.run('sudo', ['mv', binaryName, '/usr/local/bin/sweep'], runInShell: true);
+      console.writeLine(color('Success! Run using "sweep".', ConsoleColor.green));
+    }
+  } else {
+    console.writeLine(color('Failed: ${res.stderr}', ConsoleColor.red));
+  }
 }
 
 Future<void> runUninstall() async {
-  if (Platform.isWindows) print('Please manually delete sweep.exe from your PATH folder.');
-  else {
+  if (Platform.isWindows) {
+    console.writeLine('Please manually delete sweep.exe from your PATH folder.');
+  } else {
     final res = await Process.run('sudo', ['rm', '/usr/local/bin/sweep'], runInShell: true);
-    if (res.exitCode == 0) print('Success! Sweep uninstalled.');
-    else print('Failed: ${res.stderr}');
+    if (res.exitCode == 0) {
+      console.writeLine(color('Success! Sweep uninstalled.', ConsoleColor.green));
+    } else {
+      console.writeLine(color('Failed: ${res.stderr}', ConsoleColor.red));
+    }
   }
 }
 
@@ -340,28 +147,28 @@ Future<bool> checkFlutterInstalled() async {
 }
 
 Future<bool> promptInstallFlutter() async {
-  print('\n$red${bold}⚠️ Flutter SDK not found!$reset');
-  print('Building the Desktop app requires the Flutter SDK.');
-  stdout.write('${bold}Would you like to attempt automated installation? (y/n/skip): $reset');
+  console.writeLine('\n' + color('⚠️ Flutter SDK not found!', ConsoleColor.red, isBold: true));
+  console.writeLine('Building the Desktop app requires the Flutter SDK.');
+  stdout.write(color('Would you like to attempt automated installation? (y/n/skip): ', ConsoleColor.white, isBold: true));
   final choice = stdin.readLineSync()?.toLowerCase();
   
   if (choice == 'y') {
-    print('\n${blue}Attempting automated installation...$reset');
+    console.writeLine('\n' + color('Attempting automated installation...', ConsoleColor.blue));
     if (Platform.isMacOS) {
-      print('Running: brew install --cask flutter');
+      console.writeLine('Running: brew install --cask flutter');
       final res = await Process.run('brew', ['install', '--cask', 'flutter'], runInShell: true);
       if (res.exitCode == 0) return true;
     } else if (Platform.isLinux) {
-      print('Running: sudo snap install flutter --classic');
+      console.writeLine('Running: sudo snap install flutter --classic');
       final res = await Process.run('sudo', ['snap', 'install', 'flutter', '--classic'], runInShell: true);
       if (res.exitCode == 0) return true;
     } else if (Platform.isWindows) {
-      print('Running: choco install flutter');
+      console.writeLine('Running: choco install flutter');
       final res = await Process.run('choco', ['install', 'flutter'], runInShell: true);
       if (res.exitCode == 0) return true;
     }
-    print('\n$yellow⚠️ Automated install failed or platform not supported.$reset');
-    print('Please install manually from: ${bold}https://docs.flutter.dev/get-started/install$reset');
+    console.writeLine('\n' + color('⚠️ Automated install failed or platform not supported.', ConsoleColor.yellow));
+    console.writeLine('Please install manually from: ${color('https://docs.flutter.dev/get-started/install', ConsoleColor.white, isBold: true)}');
   }
   return false;
 }
@@ -369,37 +176,36 @@ Future<bool> promptInstallFlutter() async {
 Future<void> runDesktopBuild() async {
   if (!await checkFlutterInstalled()) {
     if (!await promptInstallFlutter()) {
-      print('\n${yellow}Desktop installation skipped.$reset');
+      console.writeLine('\n' + color('Desktop installation skipped.', ConsoleColor.yellow));
       return;
     }
   }
 
-  print('\n$bold${blue}🚀 Initiating Sweep Desktop Build Sequence...$reset');
+  console.writeLine('\n' + color('🚀 Initiating Sweep Desktop Build Sequence...', ConsoleColor.blue, isBold: true));
   final desktopDir = Directory('${Directory(Platform.script.toFilePath()).parent.path}/sweep_desktop');
   String platform = Platform.isMacOS ? 'macos' : Platform.isWindows ? 'windows' : 'linux';
   
-  print('${gray}Step 1/3: Resolving dependencies...$reset');
+  console.writeLine(color('Step 1/3: Resolving dependencies...', ConsoleColor.black));
   showProgressBar(1, 3, status: 'flutter pub get');
   await Process.run('flutter', ['pub', 'get'], workingDirectory: desktopDir.path, runInShell: true);
   
-  print('\n${gray}Step 2/3: Compiling native $platform bundle...$reset');
+  console.writeLine('\n' + color('Step 2/3: Compiling native $platform bundle...', ConsoleColor.black));
   showProgressBar(2, 3, status: 'flutter build $platform');
   
   final process = await Process.start('flutter', ['build', platform], workingDirectory: desktopDir.path, runInShell: true);
   
-  // Stream output to show logs
   process.stdout.transform(utf8.decoder).listen((data) {
-    if (data.trim().isNotEmpty) stdout.write('  $gray[LOG]$reset ${data.trim()}\n');
+    if (data.trim().isNotEmpty) stdout.write('  ${color('[LOG]', ConsoleColor.black)} ${data.trim()}\n');
   });
   
   final exitCode = await process.exitCode;
   
   if (exitCode == 0) {
-    print('\n${gray}Step 3/3: Build successful!$reset');
+    console.writeLine('\n' + color('Step 3/3: Build successful!', ConsoleColor.black));
     showProgressBar(3, 3, status: 'Ready');
-    print('\n$green${bold}✅ Desktop build completed successfully.$reset');
+    console.writeLine('\n' + color('✅ Desktop build completed successfully.', ConsoleColor.green, isBold: true));
   } else {
-    print('\n$red${bold}❌ Build process failed (Exit Code: $exitCode).$reset');
+    console.writeLine('\n' + color('❌ Build process failed (Exit Code: $exitCode).', ConsoleColor.red, isBold: true));
   }
 }
 
@@ -408,15 +214,15 @@ Future<void> runDesktopInstall() async {
   final projectDir = Directory(Platform.script.toFilePath()).parent.path;
   final desktopDir = '$projectDir/sweep_desktop';
   
-  print('\n$bold${blue}🚚 Finalizing Installation...$reset');
+  console.writeLine('\n' + color('🚚 Finalizing Installation...', ConsoleColor.blue, isBold: true));
   
   if (Platform.isMacOS) {
-    print('${gray}Copying Sweep.app to /Applications...$reset');
+    console.writeLine(color('Copying Sweep.app to /Applications...', ConsoleColor.black));
     showProgressBar(90, 100, status: 'Installing');
     await Process.run('cp', ['-R', '$desktopDir/build/macos/Build/Products/Release/Sweep.app', '/Applications/'], runInShell: true);
-    print('\n$green${bold}✨ Success! Sweep is now in your Applications folder.$reset\n');
+    console.writeLine('\n' + color('✨ Success! Sweep is now in your Applications folder.', ConsoleColor.green, isBold: true) + '\n');
   } else if (Platform.isWindows) {
-    print('${gray}Deploying Windows artifacts to AppData...$reset');
+    console.writeLine(color('Deploying Windows artifacts to AppData...', ConsoleColor.black));
     showProgressBar(90, 100, status: 'Installing');
     final installDir = Directory('${Platform.environment['APPDATA']}\\Sweep');
     if (!installDir.existsSync()) installDir.createSync(recursive: true);
@@ -424,10 +230,10 @@ Future<void> runDesktopInstall() async {
     final buildDir = '$desktopDir\\build\\windows\\x64\\runner\\Release';
     await Process.run('powershell', ['Copy-Item', '-Path', '"$buildDir\\*"', '-Destination', '"${installDir.path}"', '-Recurse', '-Force']);
     
-    print('\n$green${bold}✨ Success! Sweep Desktop is installed in ${installDir.path}.$reset');
-    print('${yellow}Tip: Create a shortcut to ${installDir.path}\\sweep_desktop.exe to launch it easily.$reset\n');
+    console.writeLine('\n' + color('✨ Success! Sweep Desktop is installed in ${installDir.path}.', ConsoleColor.green, isBold: true));
+    console.writeLine(color('Tip: Create a shortcut to ${installDir.path}\\sweep_desktop.exe to launch it easily.', ConsoleColor.yellow) + '\n');
   } else if (Platform.isLinux) {
-    print('${gray}Installing Linux bundle and menu entry...$reset');
+    console.writeLine(color('Installing Linux bundle and menu entry...', ConsoleColor.black));
     showProgressBar(90, 100, status: 'Installing');
     final installDir = Directory('${Platform.environment['HOME']}/.local/share/sweep');
     if (!installDir.existsSync()) installDir.createSync(recursive: true);
@@ -446,21 +252,21 @@ Type=Application
 Categories=Utility;
 ''');
     
-    print('\n$green${bold}✨ Success! Sweep Desktop is installed and added to your application menu.$reset\n');
+    console.writeLine('\n' + color('✨ Success! Sweep Desktop is installed and added to your application menu.', ConsoleColor.green, isBold: true) + '\n');
   }
 }
 
 Future<void> updateSweep() async {
-  print('Updating Sweep CLI...');
+  console.writeLine('Updating Sweep CLI...');
   try {
     final client = HttpClient();
     final request = await client.getUrl(Uri.parse('https://raw.githubusercontent.com/abdulrasol/sweep-cli/main/sweep.dart'));
     final response = await request.close();
     final contents = await response.transform(utf8.decoder).join();
     File(Platform.script.toFilePath()).writeAsStringSync(contents);
-    print('Update downloaded. Re-installing binary...');
+    console.writeLine('Update downloaded. Re-installing binary...');
     await runInstallation();
-  } catch (e) { print('Update failed: $e'); }
+  } catch (e) { console.writeLine(color('Update failed: $e', ConsoleColor.red)); }
 }
 
 void main(List<String> args) async {
@@ -476,173 +282,175 @@ void main(List<String> args) async {
   final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '';
   final config = await Config.load();
 
-  final frameworks = [
-    Framework(name: 'Android Native', markers: ['build.gradle', 'build.gradle.kts'], cleanupLabel: 'Android Build', foldersToNuke: ['build', 'app/build', '.gradle'], globalCaches: [CleanupItem(label: 'Gradle Cache', category: 'ANDROID CACHES', path: '$home/.gradle/caches')]),
-    Framework(name: 'Flutter', markers: ['pubspec.yaml'], cleanupLabel: 'flutter clean', command: 'flutter clean', auditCommand: 'flutter pub outdated', upgradeCommand: 'flutter pub upgrade', foldersToNuke: ['android/.gradle', '.dart_tool', 'ios/Pods'], globalCaches: [CleanupItem(label: 'Dart Pub Cache', category: 'FLUTTER CACHES', path: '$home/.pub-cache'), CleanupItem(label: 'CocoaPods Cache', category: 'FLUTTER CACHES', path: '$home/Library/Caches/CocoaPods')]),
-    Framework(name: 'Node / React', markers: ['package.json'], cleanupLabel: 'node_modules', auditCommand: 'npm audit', upgradeCommand: 'npm update', foldersToNuke: ['node_modules', 'dist', 'build', '.next'], globalCaches: [CleanupItem(label: 'NPM Cache', category: 'NODE CACHES', path: Platform.isWindows ? '$home/AppData/Roaming/npm-cache' : '$home/.npm/_cacache')]),
-    Framework(name: 'Python', markers: ['requirements.txt'], cleanupLabel: 'venv', foldersToNuke: ['venv', '.venv', '__pycache__']),
-    Framework(name: 'Rust', markers: ['Cargo.toml'], cleanupLabel: 'cargo clean', command: 'cargo clean', foldersToNuke: ['target']),
-    Framework(name: 'Go', markers: ['go.mod'], cleanupLabel: 'go clean', command: 'go clean -cache', foldersToNuke: ['bin']),
-  ];
-  loadCustomFrameworks(frameworks);
-
   while (true) {
-    stdout.write('\x1B[2J\x1B[H');
-    print('${blue}-----------------------------------------------------------------------$reset');
-    print(' $bold${white}Sweep CLI: Legendary Master Suite v2.3$reset');
-    print(' ${green}Powered and built by Abdulrasol with love of AI$reset');
-    print('${blue}-----------------------------------------------------------------------$reset');
-    stdout.write('$bold${white}Enter directory to scan [default: ${config.lastPath}]: $reset');
+    console.clearScreen();
+    console.resetCursorPosition();
+    
+    console.writeLine(color('-----------------------------------------------------------------------', ConsoleColor.blue, isBold: true));
+    console.writeLine(' ' + color('Sweep CLI: Legendary Master Suite v3.0', ConsoleColor.white, isBold: true));
+    console.writeLine(' ' + color('Powered and built by Abdulrasol with love of AI', ConsoleColor.green));
+    console.writeLine(color('-----------------------------------------------------------------------', ConsoleColor.blue, isBold: true));
+    
+    stdout.write(color('Enter directory to scan [default: ${config.lastPath}]: ', ConsoleColor.white, isBold: true));
+    
+    // Read input
     String input = stdin.readLineSync()?.trim() ?? '';
     if (input.isNotEmpty) config.lastPath = input;
     final scanDir = Directory(config.lastPath);
-    if (!scanDir.existsSync()) { print('${red}Error: Not found.$reset'); continue; }
+    if (!scanDir.existsSync()) {
+      console.writeLine(color('Error: Not found.', ConsoleColor.red));
+      await Future.delayed(Duration(seconds: 1));
+      continue;
+    }
     config.save();
 
-    print('${gray}Performing Legendary Deep Scan & Cloud Audit...$reset');
-    final allItems = <CleanupItem>[];
-    allItems.add(CleanupItem(label: 'Docker System Prune', category: 'SYSTEM MAINTENANCE', command: 'docker system prune -f'));
-    if (Platform.isMacOS) allItems.add(CleanupItem(label: 'Xcode DerivedData', category: 'GLOBAL CACHES', path: '$home/Library/Developer/Xcode/DerivedData'));
-
-    final Map<Framework, List<CleanupItem>> frameworkProjects = {};
-    final List<CleanupItem> bigFileItems = [];
-
-    final stream = scanDir.list(recursive: true, followLinks: false).handleError((_) {});
-    await for (var entity in stream) {
-      if (config.ignoredPaths.any((p) => entity.path.startsWith(p))) continue;
-      if (entity is File) {
-        final fileName = entity.path.split(Platform.pathSeparator).last;
-        if (entity.path.length > 100) { try { if (entity.lengthSync() > 100 * 1024 * 1024) bigFileItems.add(CleanupItem(label: 'File: $fileName', category: 'BIG FILES', path: entity.path, estimatedSize: formatMb(entity.lengthSync() / (1024 * 1024)))); } catch (_) {} }
-        for (var fw in frameworks) {
-          if (fw.markers.any((m) => fileName == m) && !entity.path.contains('${Platform.pathSeparator}.')) {
-            fw.detected = true;
-            final pPath = entity.parent.path;
-            if (frameworkProjects[fw]?.any((i) => i.path == pPath) ?? false) continue;
-            
-            // DIRTY / SYNC AUDIT
-            bool dirty = false;
-            final gitDir = Directory('$pPath/.git');
-            if (gitDir.existsSync()) {
-              final gitRes = await Process.run('git', ['status', '--porcelain'], workingDirectory: pPath);
-              if (gitRes.stdout.toString().trim().isNotEmpty) dirty = true;
-            }
-
-            final lastMod = entity.lastModifiedSync();
-            final item = CleanupItem(label: pPath.split(Platform.pathSeparator).last, category: '${fw.name.toUpperCase()} PROJECTS', path: pPath, command: fw.command, upgradeCommand: fw.upgradeCommand, lastModified: lastMod, note: 'Last touched: ${lastMod.day}/${lastMod.month}/${lastMod.year}');
-            item.isDirty = dirty;
-            frameworkProjects.putIfAbsent(fw, () => []).add(item);
-          }
-        }
-      }
-    }
-
-    for (var fw in frameworks.where((f) => f.detected)) {
-      for (var cache in fw.globalCaches) { if (cache.path == null || Directory(cache.path!).existsSync()) allItems.add(cache); }
-      final projects = frameworkProjects[fw]!;
-      allItems.add(CleanupItem(label: 'Batch: ${fw.cleanupLabel} (${projects.length} projects)', category: '${fw.name.toUpperCase()} PROJECTS', isBatch: true, command: fw.command, upgradeCommand: fw.upgradeCommand, subItems: projects)..selected = true);
-    }
-    allItems.addAll(bigFileItems);
-
-    print('${gray}Estimating space...$reset');
-    for (var i = 0; i < allItems.length; i += 5) {
-      final chunk = allItems.skip(i).take(5);
-      await Future.wait(chunk.map((item) async {
-        if (item.category == 'BIG FILES') return;
-        if (item.path != null) item.estimatedSize = await getDirSize(item.path!);
-        else if (item.isBatch && item.subItems != null) {
-          double total = 0;
-          for (var p in item.subItems!) total += parseSizeToMb(await getDirSize(p.path!));
-          if (total > 0) item.estimatedSize = formatMb(total);
-        }
-      }));
-    }
+    console.writeLine(color('Performing Legendary Deep Scan & Cloud Audit...', ConsoleColor.black));
+    final allItems = await SweepEngine.scan(config.lastPath, config.ignoredPaths);
 
     List<CleanupItem> currentList = allItems;
-    int cursor = 0; int scrollOffset = 0; bool dryRun = false;
+    int cursor = 0; 
+    int scrollOffset = 0; 
+    bool dryRun = false;
     final stack = <List<CleanupItem>>[];
     final cursorStack = <int>[];
-    SystemStats sysStats = await getSystemStats();
-
-    stdin.lineMode = false; stdin.echoMode = false;
+    
     bool actionConfirmed = false;
+    
     while (!actionConfirmed) {
-      stdout.write('\x1B[2J\x1B[H');
-      print('${blue}-----------------------------------------------------------------------$reset');
-      print(' $bold${white}Sweep Master Maintenance Console$reset');
-      print('${blue}-----------------------------------------------------------------------$reset');
-      print(' ${bold}Presets:$reset ${bold}1$reset Safe | ${bold}2$reset Deep | ${bold}3$reset Stale Nuke');
-      print(' ${bold}A$reset Archive | ${bold}M$reset Fix | ${bold}I$reset Ignore | ${bold}D$reset Dry Run | ${bold}X$reset Execute');
-      print('${blue}-----------------------------------------------------------------------$reset');
+      console.clearScreen();
+      console.resetCursorPosition();
+      
+      console.writeLine(color('-----------------------------------------------------------------------', ConsoleColor.blue, isBold: true));
+      console.writeLine(' ' + color('Sweep Master Maintenance Console', ConsoleColor.white, isBold: true));
+      console.writeLine(color('-----------------------------------------------------------------------', ConsoleColor.blue, isBold: true));
+      console.writeLine(' ' + color('Presets:', ConsoleColor.white, isBold: true) + ' ' + color('1', ConsoleColor.white, isBold: true) + ' Safe | ' + color('2', ConsoleColor.white, isBold: true) + ' Deep | ' + color('3', ConsoleColor.white, isBold: true) + ' Stale Nuke');
+      console.writeLine(' ' + color('A', ConsoleColor.white, isBold: true) + ' Archive | ' + color('M', ConsoleColor.white, isBold: true) + ' Fix | ' + color('I', ConsoleColor.white, isBold: true) + ' Ignore | ' + color('D', ConsoleColor.white, isBold: true) + ' Dry Run | ' + color('X', ConsoleColor.white, isBold: true) + ' Execute');
+      console.writeLine(color('-----------------------------------------------------------------------', ConsoleColor.blue, isBold: true));
+
       if (cursor < scrollOffset) scrollOffset = cursor;
       if (cursor >= scrollOffset + 12) scrollOffset = cursor - 12 + 1;
-      double totalMb = 0; String? lastCat;
+      
+      double totalMb = 0; 
+      String? lastCat;
+      
       for (var i = 0; i < currentList.length; i++) {
         final item = currentList[i];
-        if (item.selected) totalMb += parseSizeToMb(item.estimatedSize);
+        if (item.selected) totalMb += SweepEngine.parseSizeToMb(item.estimatedSize);
         if (i < scrollOffset || i >= scrollOffset + 12) continue;
-        if (item.category != lastCat) { print(' $bold$blue[ ${item.category} ]$reset'); lastCat = item.category; }
-        final isCursor = cursor == i;
-        final markers = '${item.isDirty ? red + "[DIRTY] " + reset : ""}${item.isStale ? red + "[STALE] " + reset : ""}${item.maintainSelected ? yellow + "[FIX] " + reset : ""}${item.archiveSelected ? cyan + "[ZIP] " + reset : ""}';
-        print('${isCursor ? "$yellow> $reset" : "  "}${item.selected ? "$green[x]$reset" : "[ ]"} $markers${item.label} ${item.estimatedSize != null ? "$gray(${item.estimatedSize})$reset" : ""}');
-        if (isCursor && item.note != null) print('     ${blue}ℹ️  ${item.note}$reset');
-      }
-      print('${blue}-----------------------------------------------------------------------$reset');
-      print('${bold}Selection:${reset} ${currentList.where((i)=>i.selected).length} | ${bold}Total:${reset} ${green}${formatMb(totalMb)}$reset');
-      print('${white}Free Disk:${reset} ${green}${sysStats.storageLeft}${reset} | ${white}RAM:${reset} ${yellow}${sysStats.ramUsage}${reset} | ${white}CPU:${reset} ${blue}${sysStats.cpuUsage}${reset}');
-
-      final byte = stdin.readByteSync();
-      sysStats = await getSystemStats();
-      if (byte == 27) {
-        final n1 = stdin.readByteSync(); if (n1 == 91) {
-          final n2 = stdin.readByteSync();
-          if (n2 == 65) cursor = (cursor - 1 + currentList.length) % currentList.length;
-          else if (n2 == 66) cursor = (cursor + 1) % currentList.length;
-        } else { stdin.lineMode = true; stdin.echoMode = true; return; }
-      } else if (byte == 32) {
-        currentList[cursor].selected = !currentList[cursor].selected;
-        if (currentList[cursor].isBatch && currentList[cursor].subItems != null) for (var s in currentList[cursor].subItems!) s.selected = currentList[cursor].selected;
-      } else if (byte == 49) { // 1 - Safe
-        for (var i in allItems) i.selected = i.category.contains('PROJECTS');
-      } else if (byte == 50) { // 2 - Deep
-        for (var i in allItems) i.selected = true;
-      } else if (byte == 51) { // 3 - Stale Nuke
-        for (var i in allItems) {
-          if (i.isBatch && i.subItems != null) { i.selected = false; for (var s in i.subItems!) s.selected = s.isStale; }
-          else i.selected = i.isStale;
+        
+        if (item.category != lastCat) {
+          console.writeLine(' ' + color('[ ${item.category} ]', ConsoleColor.blue, isBold: true));
+          lastCat = item.category;
         }
-      } else if (byte == 97 || byte == 65) { // A - Archive
-        if (currentList[cursor].path != null) currentList[cursor].archiveSelected = !currentList[cursor].archiveSelected;
-      } else if (byte == 10 || byte == 13) {
+        
+        final isCursor = cursor == i;
+        final healthMarker = item.healthStatus == 'HEALTHY' ? color("[OK] ", ConsoleColor.green) : (item.healthStatus == 'OUTDATED DEPS' ? color("[OLD] ", ConsoleColor.yellow) : (item.healthStatus == 'VULNERABILITIES FOUND' ? color("[!!!] ", ConsoleColor.red) : ""));
+        final markers = '$healthMarker${item.isDirty ? color("[DIRTY] ", ConsoleColor.red) : ""}${item.isStale ? color("[STALE] ", ConsoleColor.red) : ""}${item.maintainSelected ? color("[FIX] ", ConsoleColor.yellow) : ""}${item.archiveSelected ? color("[ZIP] ", ConsoleColor.cyan) : ""}';
+        
+        final pointer = isCursor ? color("> ", ConsoleColor.yellow) : "  ";
+        final checkbox = item.selected ? color("[x]", ConsoleColor.green) : "[ ]";
+        
+        console.writeLine('$pointer$checkbox $markers${item.label} ${color('(${item.estimatedSize ?? '0M'})', ConsoleColor.black)}');
+        
+        if (isCursor && item.note != null) {
+          console.writeLine('     ' + color('ℹ️  ${item.note}', ConsoleColor.blue));
+        }
+      }
+      
+      console.writeLine(color('-----------------------------------------------------------------------', ConsoleColor.blue, isBold: true));
+      console.writeLine('${color('Selection:', ConsoleColor.white, isBold: true)} ${currentList.where((i)=>i.selected).length} | ${color('Total:', ConsoleColor.white, isBold: true)} ${color(SweepEngine.formatMb(totalMb), ConsoleColor.green)}');
+      
+      final sysStats = await SweepEngine.getSystemStats();
+      console.writeLine('${color('Free Disk:', ConsoleColor.white)} ${color(sysStats.storageLeft, ConsoleColor.green)} | ${color('RAM:', ConsoleColor.white)} ${color(sysStats.ramUsage, ConsoleColor.yellow)} | ${color('CPU:', ConsoleColor.white)} ${color(sysStats.cpuUsage, ConsoleColor.blue)}');
+
+      final key = console.readKey();
+      
+      if (key.controlChar == ControlCharacter.arrowUp) {
+        cursor = (cursor - 1 + currentList.length) % currentList.length;
+      } else if (key.controlChar == ControlCharacter.arrowDown) {
+        cursor = (cursor + 1) % currentList.length;
+      } else if (key.char == ' ') {
+        currentList[cursor].selected = !currentList[cursor].selected;
         if (currentList[cursor].isBatch && currentList[cursor].subItems != null) {
-          stack.add(currentList); cursorStack.add(cursor);
-          currentList = currentList[cursor].subItems!; cursor = 0; scrollOffset = 0;
-        } else { actionConfirmed = true; }
-      } else if (byte == 109 || byte == 77) {
+          for (var s in currentList[cursor].subItems!) s.selected = currentList[cursor].selected;
+        }
+      } else if (key.char == '1') { // 1 - Safe
+        for (var i in allItems) i.selected = i.category.contains('PROJECTS');
+      } else if (key.char == '2') { // 2 - Deep
+        for (var i in allItems) i.selected = true;
+      } else if (key.char == '3') { // 3 - Stale Nuke
+        for (var i in allItems) {
+          if (i.isBatch && i.subItems != null) {
+            i.selected = false;
+            for (var s in i.subItems!) s.selected = s.isStale;
+          } else {
+            i.selected = i.isStale;
+          }
+        }
+      } else if (key.char == 'a' || key.char == 'A') { // A - Archive
+        if (currentList[cursor].path != null) currentList[cursor].archiveSelected = !currentList[cursor].archiveSelected;
+      } else if (key.controlChar == ControlCharacter.enter) {
+        if (currentList[cursor].isBatch && currentList[cursor].subItems != null) {
+          stack.add(currentList);
+          cursorStack.add(cursor);
+          currentList = currentList[cursor].subItems!;
+          cursor = 0;
+          scrollOffset = 0;
+        } else {
+          actionConfirmed = true;
+        }
+      } else if (key.char == 'm' || key.char == 'M') {
         if (currentList[cursor].upgradeCommand != null) {
           currentList[cursor].maintainSelected = !currentList[cursor].maintainSelected;
-          if (currentList[cursor].isBatch && currentList[cursor].subItems != null) for (var s in currentList[cursor].subItems!) s.maintainSelected = currentList[cursor].maintainSelected;
+          if (currentList[cursor].isBatch && currentList[cursor].subItems != null) {
+            for (var s in currentList[cursor].subItems!) s.maintainSelected = currentList[cursor].maintainSelected;
+          }
         }
-      } else if (byte == 105 || byte == 73) {
-        if (currentList[cursor].path != null) { config.ignoredPaths.add(currentList[cursor].path!); config.save(); currentList.removeAt(cursor); }
-      } else if (byte == 98 || byte == 66) {
-        if (stack.isNotEmpty) { currentList = stack.removeLast(); cursor = cursorStack.removeLast(); }
-        else break;
-      } else if (byte == 120 || byte == 88) actionConfirmed = true;
-      else if (byte == 113 || byte == 81) { stdin.lineMode = true; stdin.echoMode = true; return; }
+      } else if (key.char == 'i' || key.char == 'I') {
+        if (currentList[cursor].path != null) {
+          config.ignoredPaths.add(currentList[cursor].path!);
+          config.save();
+          currentList.removeAt(cursor);
+          if (cursor >= currentList.length) cursor = currentList.length - 1;
+        }
+      } else if (key.char == 'b' || key.char == 'B') {
+        if (stack.isNotEmpty) {
+          currentList = stack.removeLast();
+          cursor = cursorStack.removeLast();
+        } else {
+          break;
+        }
+      } else if (key.char == 'x' || key.char == 'X') {
+        actionConfirmed = true;
+      } else if (key.char == 'q' || key.char == 'Q' || key.controlChar == ControlCharacter.escape) {
+        return;
+      }
     }
-    stdin.lineMode = true; stdin.echoMode = true;
 
     if (!actionConfirmed) continue;
-    print('\n$bold${cyan}🚀 Executing Legendary Cleanup...$reset\n');
+    
+    console.writeLine('\n' + color('🚀 Executing Legendary Cleanup...', ConsoleColor.cyan, isBold: true) + '\n');
+    
     final selected = <CleanupItem>[];
     void collect(List<CleanupItem> list) {
-      for (var i in list) { if (i.isBatch && i.subItems != null) collect(i.subItems!); else if (i.selected || i.maintainSelected || i.archiveSelected) selected.add(i); }
+      for (var i in list) {
+        if (i.isBatch && i.subItems != null) {
+          collect(i.subItems!);
+        } else if (i.selected || i.maintainSelected || i.archiveSelected) {
+          selected.add(i);
+        }
+      }
     }
     collect(allItems);
-    selected.sort((a, b) => parseSizeToMb(b.estimatedSize).compareTo(parseSizeToMb(a.estimatedSize)));
-    int completed = 0; double reclaimedMb = 0;
+    
+    selected.sort((a, b) => SweepEngine.parseSizeToMb(b.estimatedSize).compareTo(SweepEngine.parseSizeToMb(a.estimatedSize)));
+    
+    int completed = 0; 
+    double reclaimedMb = 0;
+    
     for (var item in selected) {
       showProgressBar(completed, selected.length, status: item.label);
+      
       if (!dryRun) {
         if (item.archiveSelected && item.path != null) {
           final archiveDir = Directory('$home/Downloads/Sweep_Archives');
@@ -651,20 +459,35 @@ void main(List<String> args) async {
           await Process.run('zip', ['-r', '${archiveDir.path}/$zipName', '.'], workingDirectory: item.path, runInShell: true);
           Directory(item.path!).deleteSync(recursive: true);
         } else {
-          if (item.maintainSelected && item.upgradeCommand != null) await Process.run(item.upgradeCommand!.split(' ')[0], item.upgradeCommand!.split(' ').sublist(1), workingDirectory: item.path, runInShell: true);
+          if (item.maintainSelected && item.upgradeCommand != null) {
+            await Process.run(item.upgradeCommand!.split(' ')[0], item.upgradeCommand!.split(' ').sublist(1), workingDirectory: item.path, runInShell: true);
+          }
           if (item.selected) {
-            if (item.command != null) await Process.run(item.command!.split(' ')[0], item.command!.split(' ').sublist(1), workingDirectory: item.path, runInShell: true);
-            else if (item.path != null) { 
-              if (FileSystemEntity.isDirectorySync(item.path!)) Directory(item.path!).deleteSync(recursive: true);
-              else File(item.path!).deleteSync();
+            if (item.command != null) {
+              await Process.run(item.command!.split(' ')[0], item.command!.split(' ').sublist(1), workingDirectory: item.path, runInShell: true);
+            } else if (item.path != null) { 
+              if (FileSystemEntity.isDirectorySync(item.path!)) {
+                Directory(item.path!).deleteSync(recursive: true);
+              } else {
+                File(item.path!).delete();
+              }
             }
           }
         }
       }
-      completed++; reclaimedMb += parseSizeToMb(item.estimatedSize);
+      
+      completed++; 
+      reclaimedMb += SweepEngine.parseSizeToMb(item.estimatedSize);
     }
-    if (!dryRun) { final s = await Stats.load(); s.addRecord(reclaimedMb); s.save(); }
-    print('\n\n$bold$green✨ DONE! Reclaimed ${formatMb(reclaimedMb)}.$reset');
-    stdin.readLineSync(); return;
+    
+    if (!dryRun) {
+      final s = await Stats.load();
+      s.addRecord(reclaimedMb);
+      s.save();
+    }
+    
+    console.writeLine('\n\n' + color('✨ DONE! Reclaimed ${SweepEngine.formatMb(reclaimedMb)}.', ConsoleColor.green, isBold: true));
+    console.writeLine(color('Press any key to return to scan menu...', ConsoleColor.black));
+    console.readKey();
   }
 }

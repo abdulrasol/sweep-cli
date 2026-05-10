@@ -44,6 +44,7 @@ class CleanupItem {
   DateTime? lastModified;
   List<CleanupItem>? subItems;
   bool isDirty = false;
+  String? healthStatus;
 
   CleanupItem({
     required this.label,
@@ -58,9 +59,14 @@ class CleanupItem {
     this.lastModified,
     this.subItems,
     this.batchPaths,
+    this.healthStatus,
   });
 
   bool get isStale => lastModified != null && DateTime.now().difference(lastModified!).inDays > 30;
+
+  String get displayPath => isBatch 
+      ? '${batchPaths?.length ?? 0} locations' 
+      : (path ?? command ?? '');
 }
 
 class SystemStats {
@@ -77,6 +83,55 @@ class SystemStats {
   });
 
   factory SystemStats.empty() => SystemStats(osName: 'Loading...', storageLeft: '-', ramUsage: '-', cpuUsage: '-');
+}
+
+class Stats {
+  Map<String, double> history = {};
+  static Future<Stats> load() async {
+    final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '';
+    final file = File('$home/.sweep_stats.json');
+    if (!file.existsSync()) return Stats();
+    try {
+      final Map<String, dynamic> json = jsonDecode(file.readAsStringSync());
+      final stats = Stats();
+      json.forEach((k, v) => stats.history[k] = (v as num).toDouble());
+      return stats;
+    } catch (_) { return Stats(); }
+  }
+  void save() {
+    final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '';
+    final file = File('$home/.sweep_stats.json');
+    file.writeAsStringSync(jsonEncode(history));
+  }
+  void addRecord(double mb) {
+    if (mb <= 0) return;
+    final date = DateTime.now().toIso8601String().split('T')[0];
+    history[date] = (history[date] ?? 0) + mb;
+  }
+}
+
+class Config {
+  String lastPath = '.';
+  List<String> ignoredPaths = [];
+  static Future<Config> load() async {
+    final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '';
+    final file = File('$home/.sweep_cli_rc');
+    if (!file.existsSync()) return Config();
+    try {
+      final lines = file.readAsLinesSync();
+      final config = Config();
+      if (lines.isNotEmpty) config.lastPath = lines[0];
+      if (lines.length > 1) config.ignoredPaths = lines.sublist(1);
+      return config;
+    } catch (_) { return Config(); }
+  }
+  void save() {
+    final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '';
+    final file = File('$home/.sweep_cli_rc');
+    final buffer = StringBuffer()..writeln(lastPath);
+    for (var p in ignoredPaths) buffer.writeln(p);
+    file.writeAsStringSync(buffer.toString());
+  }
 }
 
 class SweepEngine {
@@ -190,6 +245,34 @@ class SweepEngine {
     );
   }
 
+  static Future<double> getDiskSpaceGb() async {
+    try {
+      if (Platform.isMacOS) {
+        final diskRes = await Process.run('df', ['-g', '/']); // -g for GB
+        if (diskRes.exitCode == 0) {
+          final lines = diskRes.stdout.toString().split('\n');
+          if (lines.length > 1) {
+            final parts = lines[1].split(RegExp(r'\s+'));
+            if (parts.length > 3) return double.tryParse(parts[3]) ?? 0;
+          }
+        }
+      } else if (Platform.isWindows) {
+        final diskRes = await Process.run('powershell', ['-Command', '(Get-PSDrive C).Free / 1GB']);
+        if (diskRes.exitCode == 0) return double.tryParse(diskRes.stdout.toString().trim()) ?? 0;
+      } else if (Platform.isLinux) {
+        final diskRes = await Process.run('df', ['-BG', '/']);
+        if (diskRes.exitCode == 0) {
+          final lines = diskRes.stdout.toString().split('\n');
+          if (lines.length > 1) {
+            final parts = lines[1].split(RegExp(r'\s+'));
+            if (parts.length > 3) return double.tryParse(parts[3].replaceAll('G', '')) ?? 0;
+          }
+        }
+      }
+    } catch (_) {}
+    return 0;
+  }
+
   static Future<List<CleanupItem>> scan(String pathString, List<String> ignoredPaths) async {
     final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '';
     final scanDir = Directory(pathString);
@@ -269,14 +352,25 @@ class SweepEngine {
               try {
                 final gitRes = await Process.run('git', ['status', '--porcelain'], workingDirectory: pPath);
                 if (gitRes.stdout.toString().trim().isNotEmpty) dirty = true;
-              } catch (_) {
-                // Ignore permission/missing command errors in sandbox
-              }
+              } catch (_) {}
             }
 
             final lastMod = entity.lastModifiedSync();
             final pItem = CleanupItem(label: pPath.split(Platform.pathSeparator).last, category: '${fw.name.toUpperCase()} PROJECTS', path: pPath, command: fw.command, upgradeCommand: fw.upgradeCommand, lastModified: lastMod, note: 'Last touched: ${lastMod.day}/${lastMod.month}/${lastMod.year}');
             pItem.isDirty = dirty;
+
+            // Audit Check
+            if (fw.auditCommand != null) {
+              try {
+                final auditRes = await Process.run(fw.auditCommand!.split(' ')[0], fw.auditCommand!.split(' ').sublist(1), workingDirectory: pPath);
+                if (auditRes.exitCode != 0) {
+                  pItem.healthStatus = fw.name == 'Flutter' ? 'OUTDATED DEPS' : 'VULNERABILITIES FOUND';
+                } else {
+                  pItem.healthStatus = 'HEALTHY';
+                }
+              } catch (_) {}
+            }
+
             frameworkProjects.putIfAbsent(fw, () => []).add(pItem);
           }
         }
@@ -290,30 +384,5 @@ class SweepEngine {
     }
     allItems.addAll(bigFileItems);
     return allItems;
-  }
-}
-
-class Stats {
-  Map<String, double> history = {};
-  static Future<Stats> load() async {
-    final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '';
-    final file = File('$home/.sweep_stats.json');
-    if (!file.existsSync()) return Stats();
-    try {
-      final Map<String, dynamic> json = jsonDecode(file.readAsStringSync());
-      final stats = Stats();
-      json.forEach((k, v) => stats.history[k] = (v as num).toDouble());
-      return stats;
-    } catch (_) { return Stats(); }
-  }
-  void save() {
-    final home = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '';
-    final file = File('$home/.sweep_stats.json');
-    file.writeAsStringSync(jsonEncode(history));
-  }
-  void addRecord(double mb) {
-    if (mb <= 0) return;
-    final date = DateTime.now().toIso8601String().split('T')[0];
-    history[date] = (history[date] ?? 0) + mb;
   }
 }

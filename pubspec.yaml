@@ -1,0 +1,13 @@
+name: sweep_cli
+description: A Master Maintenance Console for Cross-Platform Developers.
+version: 3.0.4
+publish_to: none
+
+environment:
+  sdk: ^3.11.4
+
+dependencies:
+  dart_console: ^4.1.4
+  path: ^1.9.1
+  args: ^2.7.0
+  intl: ^0.20.2

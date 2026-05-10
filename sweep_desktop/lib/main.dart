@@ -9,7 +9,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:system_tray/system_tray.dart';
-import 'sweep_engine.dart';
+import 'sweep_core.dart';
 
 // --- THEME & STATE MANAGEMENT ---
 
@@ -58,7 +58,7 @@ class AppTheme extends ChangeNotifier {
   Color get textMuted => isDark ? Colors.white38 : Colors.black45;
   Color get textHint => isDark ? Colors.white24 : Colors.black26;
   Color get textDisabled => isDark ? Colors.white.withOpacity(0.1) : Colors.black.withOpacity(0.1);
-  
+
   Color get cardColor => isDark ? const Color(0xFF14191F) : Colors.white;
   Color get sidebarColor => isDark ? const Color(0xFF0D1117) : const Color(0xFFE5E7EB);
   Color get bgSubtle => isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.05);
@@ -107,10 +107,29 @@ class AppState extends ChangeNotifier {
     'Unreal Engine': true,
   };
 
+  bool guardianEnabled = true;
+  double diskThreshold = 5.0; // 5GB default
+
   AppState(this._prefs) {
     _loadSettings();
     _startStats();
     _loadHistory();
+    _startGuardian();
+  }
+
+  void _startGuardian() {
+    Timer.periodic(const Duration(hours: 1), (t) async {
+      if (!guardianEnabled) return;
+      final freeGb = await SweepEngine.getDiskSpaceGb();
+      if (freeGb < diskThreshold) {
+        final notification = LocalNotification(
+          title: "Sweep: Low Disk Space!",
+          body: "You have only ${freeGb.toStringAsFixed(1)}GB left. Run Sweep to reclaim space.",
+          actions: [LocalNotificationAction(text: "Launch Sweep")],
+        );
+        notification.show();
+      }
+    });
   }
 
   Future<void> _loadHistory() async {
@@ -120,6 +139,9 @@ class AppState extends ChangeNotifier {
 
   void _loadSettings() {
     scanPath = _prefs?.getString('scanPath') ?? Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '/';
+    guardianEnabled = _prefs?.getBool('guardianEnabled') ?? true;
+    diskThreshold = _prefs?.getDouble('diskThreshold') ?? 5.0;
+
     final modulesJson = _prefs?.getString('activeModules');
     if (modulesJson != null) {
       try {
@@ -146,6 +168,18 @@ class AppState extends ChangeNotifier {
   void toggleModule(String name) {
     activeModules[name] = !(activeModules[name] ?? false);
     _saveModules();
+    notifyListeners();
+  }
+
+  void toggleGuardian() {
+    guardianEnabled = !guardianEnabled;
+    _prefs?.setBool('guardianEnabled', guardianEnabled);
+    notifyListeners();
+  }
+
+  void setThreshold(double val) {
+    diskThreshold = val;
+    _prefs?.setDouble('diskThreshold', diskThreshold);
     notifyListeners();
   }
 
@@ -183,11 +217,11 @@ class AppState extends ChangeNotifier {
 
     try {
       final items = await SweepEngine.scan(scanPath, []);
-      
+
       // Filter items based on active modules
       detectedItems = items.where((item) {
         if (item.category == 'GLOBAL OS CACHES' || item.category == 'GLOBAL CACHES' || item.category == 'BIG FILES (>100MB)') return true;
-        
+
         final cat = item.category.toUpperCase();
         if (cat.contains('FLUTTER') && !(activeModules['Flutter / Dart'] ?? false)) return false;
         if (cat.contains('NODE') && !(activeModules['Node / PNPM'] ?? false)) return false;
@@ -196,20 +230,23 @@ class AppState extends ChangeNotifier {
         if (cat.contains('PYTHON') && !(activeModules['Python / Conda'] ?? false)) return false;
         if (cat.contains('PHP') && !(activeModules['PHP / Laravel'] ?? false)) return false;
         if (cat.contains('NET') && !(activeModules['NET / C#'] ?? false)) return false;
-        
+
         return true;
       }).toList();
-      
+
       // Parallel sizing
-      await Future.wait(detectedItems.map((item) async {
-        if (item.path != null) item.estimatedSize = await SweepEngine.getDirSize(item.path!);
-        else if (item.isBatch && item.subItems != null) {
-          double total = 0;
-          final res = await Future.wait(item.subItems!.map((p) => SweepEngine.getDirSize(p.path!)));
-          for (var s in res) total += SweepEngine.parseSizeToMb(s);
-          if (total > 0) item.estimatedSize = SweepEngine.formatMb(total);
-        }
-      }));
+      await Future.wait(
+        detectedItems.map((item) async {
+          if (item.path != null)
+            item.estimatedSize = await SweepEngine.getDirSize(item.path!);
+          else if (item.isBatch && item.subItems != null) {
+            double total = 0;
+            final res = await Future.wait(item.subItems!.map((p) => SweepEngine.getDirSize(p.path!)));
+            for (var s in res) total += SweepEngine.parseSizeToMb(s);
+            if (total > 0) item.estimatedSize = SweepEngine.formatMb(total);
+          }
+        }),
+      );
     } finally {
       isScanning = false;
       notifyListeners();
@@ -225,10 +262,13 @@ class AppState extends ChangeNotifier {
     final selected = <CleanupItem>[];
     void collect(List<CleanupItem> list) {
       for (var i in list) {
-        if (i.isBatch && i.subItems != null) collect(i.subItems!);
-        else if (i.selected || i.maintainSelected) selected.add(i);
+        if (i.isBatch && i.subItems != null)
+          collect(i.subItems!);
+        else if (i.selected || i.maintainSelected)
+          selected.add(i);
       }
     }
+
     collect(detectedItems);
 
     double totalReclaimed = 0;
@@ -247,8 +287,10 @@ class AppState extends ChangeNotifier {
           if (item.command != null) {
             await Process.run(item.command!.split(' ')[0], item.command!.split(' ').sublist(1), workingDirectory: item.path, runInShell: true);
           } else if (item.path != null) {
-            if (FileSystemEntity.isDirectorySync(item.path!)) await Directory(item.path!).delete(recursive: true);
-            else await File(item.path!).delete();
+            if (FileSystemEntity.isDirectorySync(item.path!))
+              await Directory(item.path!).delete(recursive: true);
+            else
+              await File(item.path!).delete();
           }
         }
       } catch (_) {}
@@ -275,12 +317,9 @@ Future<void> initSystemTray() async {
   String path = Platform.isWindows ? 'assets/icon.ico' : 'assets/icon.png';
   final AppWindow appWindow = AppWindow();
   final SystemTray systemTray = SystemTray();
-  
-  await systemTray.initSystemTray(
-    title: "Sweep",
-    iconPath: path,
-  );
-  
+
+  await systemTray.initSystemTray(title: "Sweep", iconPath: path);
+
   final Menu menu = Menu();
   await menu.buildFrom([
     MenuItemLabel(label: 'Show Dashboard', onClicked: (menuItem) => appWindow.show()),
@@ -288,9 +327,9 @@ Future<void> initSystemTray() async {
     MenuSeparator(),
     MenuItemLabel(label: 'Exit Sweep', onClicked: (menuItem) => exit(0)),
   ]);
-  
+
   await systemTray.setContextMenu(menu);
-  
+
   systemTray.registerSystemTrayEventHandler((eventName) {
     if (eventName == kSystemTrayEventClick) {
       Platform.isWindows ? appWindow.show() : systemTray.popUpContextMenu();
@@ -304,13 +343,25 @@ void main() async {
   try {
     WidgetsFlutterBinding.ensureInitialized();
     await windowManager.ensureInitialized();
-    
+
     SharedPreferences? prefs;
-    try { prefs = await SharedPreferences.getInstance(); } catch (e) { debugPrint('Prefs load failed: $e'); }
+    try {
+      prefs = await SharedPreferences.getInstance();
+    } catch (e) {
+      debugPrint('Prefs load failed: $e');
+    }
 
     // Try optional components but don't crash
-    try { await localNotifier.setup(appName: 'Sweep'); } catch (e) { debugPrint('Local Notifier failed: $e'); }
-    try { await initSystemTray(); } catch (e) { debugPrint('System Tray failed: $e'); }
+    try {
+      await localNotifier.setup(appName: 'Sweep');
+    } catch (e) {
+      debugPrint('Local Notifier failed: $e');
+    }
+    try {
+      await initSystemTray();
+    } catch (e) {
+      debugPrint('System Tray failed: $e');
+    }
 
     WindowOptions windowOptions = const WindowOptions(
       size: Size(1300, 900),
@@ -320,7 +371,7 @@ void main() async {
       titleBarStyle: TitleBarStyle.normal,
       title: 'Sweep',
     );
-    
+
     await windowManager.waitUntilReadyToShow(windowOptions, () async {
       await windowManager.show();
       await windowManager.focus();
@@ -338,7 +389,11 @@ void main() async {
   } catch (e) {
     // Last resort: just try to run something so it doesn't close
     debugPrint('FATAL STARTUP ERROR: $e');
-    runApp(MaterialApp(home: Scaffold(body: Center(child: Text('Startup Error: $e')))));
+    runApp(
+      MaterialApp(
+        home: Scaffold(body: Center(child: Text('Startup Error: $e'))),
+      ),
+    );
   }
 }
 
@@ -348,12 +403,7 @@ class SweepApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = context.watch<AppTheme>();
-    return MaterialApp(
-      title: 'Sweep',
-      debugShowCheckedModeBanner: false,
-      theme: theme.themeData,
-      home: const MainLayout(),
-    );
+    return MaterialApp(title: 'Sweep', debugShowCheckedModeBanner: false, theme: theme.themeData, home: const MainLayout());
   }
 }
 
@@ -382,14 +432,22 @@ class MainLayout extends StatelessWidget {
   Widget _buildCurrentPage(BuildContext context) {
     final nav = context.watch<AppState>().currentNav;
     switch (nav) {
-      case 'Dashboard': return const DashboardPage();
-      case 'Scan Scope': return const ScanScopePage();
-      case 'Review Targets': return const ReviewTargetsPage();
-      case 'Purge Sequence': return const PurgeSequencePage();
-      case 'Custom Rules': return const RulesManagerPage();
-      case 'Settings': return const SettingsPage();
-      case 'About System': return const AboutSystemPage();
-      default: return const ScanScopePage();
+      case 'Dashboard':
+        return const DashboardPage();
+      case 'Scan Scope':
+        return const ScanScopePage();
+      case 'Review Targets':
+        return const ReviewTargetsPage();
+      case 'Purge Sequence':
+        return const PurgeSequencePage();
+      case 'Custom Rules':
+        return const RulesManagerPage();
+      case 'Settings':
+        return const SettingsPage();
+      case 'About System':
+        return const AboutSystemPage();
+      default:
+        return const ScanScopePage();
     }
   }
 }
@@ -401,7 +459,6 @@ class Sidebar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<AppState>();
     final theme = context.watch<AppTheme>();
 
     return Container(
@@ -419,7 +476,10 @@ class Sidebar extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text('Sweep', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, letterSpacing: 1.5)),
-                  Text('RECLAIM YOUR STORAGE', style: TextStyle(fontSize: 10, color: theme.accentColor, fontWeight: FontWeight.bold)),
+                  Text(
+                    'RECLAIM YOUR STORAGE',
+                    style: TextStyle(fontSize: 10, color: theme.accentColor, fontWeight: FontWeight.bold),
+                  ),
                 ],
               ),
             ],
@@ -430,7 +490,10 @@ class Sidebar extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('NAVIGATION', style: TextStyle(fontSize: 11, color: theme.textHint, fontWeight: FontWeight.bold, letterSpacing: 2)),
+                  Text(
+                    'NAVIGATION',
+                    style: TextStyle(fontSize: 11, color: theme.textHint, fontWeight: FontWeight.bold, letterSpacing: 2),
+                  ),
                   const SizedBox(height: 24),
                   _NavLink('Dashboard', Icons.dashboard_outlined),
                   _NavLink('Scan Scope', Icons.filter_center_focus),
@@ -472,7 +535,10 @@ class _NavLink extends StatelessWidget {
       child: ListTile(
         onTap: () => state.setNav(label),
         leading: Icon(icon, color: isActive ? theme.accentColor : theme.textMuted, size: 22),
-        title: Text(label, style: TextStyle(color: isActive ? theme.textPrimary : theme.textMuted, fontSize: 15, fontWeight: isActive ? FontWeight.bold : FontWeight.normal)),
+        title: Text(
+          label,
+          style: TextStyle(color: isActive ? theme.textPrimary : theme.textMuted, fontSize: 15, fontWeight: isActive ? FontWeight.bold : FontWeight.normal),
+        ),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
     );
@@ -485,7 +551,6 @@ class TopBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = context.watch<AppTheme>();
-    final state = context.watch<AppState>();
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 24),
@@ -498,7 +563,10 @@ class TopBar extends StatelessWidget {
               children: [
                 Icon(Icons.memory, size: 14, color: theme.accentColor),
                 const SizedBox(width: 10),
-                Text('SWEEP . CORE', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 1, color: theme.textSecondary)),
+                Text(
+                  'SWEEP . CORE',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 1, color: theme.textSecondary),
+                ),
               ],
             ),
           ),
@@ -510,7 +578,8 @@ class TopBar extends StatelessWidget {
               return GestureDetector(
                 onTap: () => theme.setAccent(name),
                 child: Container(
-                  width: 14, height: 14,
+                  width: 14,
+                  height: 14,
                   margin: const EdgeInsets.only(left: 12),
                   decoration: BoxDecoration(
                     color: theme.palette[name]!.withOpacity(isSelected ? 1 : 0.3),
@@ -530,7 +599,10 @@ class TopBar extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             decoration: BoxDecoration(color: theme.accentColor.withOpacity(0.1), borderRadius: BorderRadius.circular(24)),
-            child: Text('ENGINE V2.0.4', style: TextStyle(fontSize: 10, color: theme.accentColor, fontWeight: FontWeight.bold)),
+            child: Text(
+              'ENGINE V2.0.4',
+              style: TextStyle(fontSize: 10, color: theme.accentColor, fontWeight: FontWeight.bold),
+            ),
           ),
         ],
       ),
@@ -556,7 +628,10 @@ class RuntimeStatusCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('RUNTIME STATUS', style: TextStyle(fontSize: 11, color: theme.textHint, fontWeight: FontWeight.bold, letterSpacing: 1.5)),
+          Text(
+            'RUNTIME STATUS',
+            style: TextStyle(fontSize: 11, color: theme.textHint, fontWeight: FontWeight.bold, letterSpacing: 1.5),
+          ),
           const SizedBox(height: 24),
           _StatusLine('CPU', state.systemStats.cpuUsage, Colors.blueAccent),
           const SizedBox(height: 20),
@@ -584,8 +659,10 @@ class _StatusLine extends StatelessWidget {
     if (value != '-' && value.isNotEmpty) {
       final clean = value.replaceAll(RegExp(r'[^0-9\.]'), '');
       final val = double.tryParse(clean) ?? 0;
-      if (label == 'CPU') progress = (val / 100).clamp(0, 1.0);
-      else if (label == 'RAM') progress = (val / 16).clamp(0, 1.0);
+      if (label == 'CPU')
+        progress = (val / 100).clamp(0, 1.0);
+      else if (label == 'RAM')
+        progress = (val / 16).clamp(0, 1.0);
     }
 
     return Column(
@@ -594,7 +671,10 @@ class _StatusLine extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Text(label, style: TextStyle(fontSize: 12, color: theme.textTertiary)),
-            Text(value, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: theme.textSecondary)),
+            Text(
+              value,
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: theme.textSecondary),
+            ),
           ],
         ),
         const SizedBox(height: 10),
@@ -625,25 +705,47 @@ class ScanScopePage extends StatelessWidget {
           const SizedBox(height: 48),
           const Text('Target Scope Configuration', style: TextStyle(fontSize: 42, fontWeight: FontWeight.bold)),
           const SizedBox(height: 16),
-          Text('Sweep now supports technical and stealth storage eaters, including virtual machines, emulators, and communication caches.', style: TextStyle(color: theme.textMuted, fontSize: 18, height: 1.5)),
+          Text(
+            'Sweep now supports technical and stealth storage eaters, including virtual machines, emulators, and communication caches.',
+            style: TextStyle(color: theme.textMuted, fontSize: 18, height: 1.5),
+          ),
           const SizedBox(height: 64),
           // Path Card
           Container(
             padding: const EdgeInsets.all(32),
-            decoration: BoxDecoration(color: theme.bgSubtle, borderRadius: BorderRadius.circular(24), border: Border.all(color: theme.borderSubtle)),
+            decoration: BoxDecoration(
+              color: theme.bgSubtle,
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: theme.borderSubtle),
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(children: [Icon(Icons.folder_outlined, size: 18, color: theme.accentColor), const SizedBox(width: 12), Text('ROOT DIRECTORY SCOPE', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, letterSpacing: 1.5, color: theme.textSecondary))]),
+                Row(
+                  children: [
+                    Icon(Icons.folder_outlined, size: 18, color: theme.accentColor),
+                    const SizedBox(width: 12),
+                    Text(
+                      'ROOT DIRECTORY SCOPE',
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, letterSpacing: 1.5, color: theme.textSecondary),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 24),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-                  decoration: BoxDecoration(color: theme.isDark ? Colors.black.withOpacity(0.3) : Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: theme.borderSubtle)),
+                  decoration: BoxDecoration(
+                    color: theme.isDark ? Colors.black.withOpacity(0.3) : Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: theme.borderSubtle),
+                  ),
                   child: Row(
                     children: [
                       Icon(Icons.computer, color: theme.textHint),
                       const SizedBox(width: 20),
-                      Expanded(child: Text(state.scanPath, style: TextStyle(fontSize: 16, color: theme.textSecondary))),
+                      Expanded(
+                        child: Text(state.scanPath, style: TextStyle(fontSize: 16, color: theme.textSecondary)),
+                      ),
                       TextButton.icon(
                         onPressed: () async {
                           String? path = await FilePicker.platform.getDirectoryPath();
@@ -651,7 +753,10 @@ class ScanScopePage extends StatelessWidget {
                         },
                         icon: const Icon(Icons.edit_outlined, size: 18),
                         label: const Text('MODIFY'),
-                        style: TextButton.styleFrom(foregroundColor: theme.isDark ? Colors.white : Colors.black, padding: const EdgeInsets.symmetric(horizontal: 24)),
+                        style: TextButton.styleFrom(
+                          foregroundColor: theme.isDark ? Colors.white : Colors.black,
+                          padding: const EdgeInsets.symmetric(horizontal: 24),
+                        ),
                       ),
                     ],
                   ),
@@ -663,12 +768,21 @@ class ScanScopePage extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('ANALYSIS MODULES (${state.activeModules.values.where((v) => v).length} ACTIVE)', style: TextStyle(fontSize: 13, color: theme.textHint, fontWeight: FontWeight.bold, letterSpacing: 2)),
-              TextButton(onPressed: () {
-                for (var key in state.activeModules.keys) {
-                  if (!(state.activeModules[key] ?? false)) state.toggleModule(key);
-                }
-              }, child: Text('SELECT ALL MODULES', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: theme.accentColor))),
+              Text(
+                'ANALYSIS MODULES (${state.activeModules.values.where((v) => v).length} ACTIVE)',
+                style: TextStyle(fontSize: 13, color: theme.textHint, fontWeight: FontWeight.bold, letterSpacing: 2),
+              ),
+              TextButton(
+                onPressed: () {
+                  for (var key in state.activeModules.keys) {
+                    if (!(state.activeModules[key] ?? false)) state.toggleModule(key);
+                  }
+                },
+                child: Text(
+                  'SELECT ALL MODULES',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: theme.accentColor),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 32),
@@ -684,7 +798,8 @@ class ScanScopePage extends StatelessWidget {
           const SizedBox(height: 64),
           Center(
             child: SizedBox(
-              width: 400, height: 72,
+              width: 400,
+              height: 72,
               child: ElevatedButton(
                 onPressed: state.runScan,
                 style: ElevatedButton.styleFrom(
@@ -732,9 +847,13 @@ class _ModuleCard extends StatelessWidget {
       child: Row(
         children: [
           Container(
-            width: 56, height: 56,
+            width: 56,
+            height: 56,
             padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(color: theme.isDark ? Colors.black.withOpacity(0.2) : theme.accentColor.withOpacity(0.1), borderRadius: BorderRadius.circular(16)),
+            decoration: BoxDecoration(
+              color: theme.isDark ? Colors.black.withOpacity(0.2) : theme.accentColor.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(16),
+            ),
             child: _getIcon(name),
           ),
           const SizedBox(width: 20),
@@ -743,17 +862,16 @@ class _ModuleCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Text(name, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: theme.textPrimary)),
+                Text(
+                  name,
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: theme.textPrimary),
+                ),
                 const SizedBox(height: 6),
                 Text(_getDesc(name), style: TextStyle(fontSize: 11, color: theme.textHint)),
               ],
             ),
           ),
-          Switch(
-            value: isActive,
-            onChanged: (v) => state.toggleModule(name),
-            activeColor: theme.accentColor,
-          ),
+          Switch(value: isActive, onChanged: (v) => state.toggleModule(name), activeColor: theme.accentColor),
         ],
       ),
     );
@@ -761,16 +879,28 @@ class _ModuleCard extends StatelessWidget {
 
   Widget _getIcon(String name) {
     String asset = 'ai.png';
-    if (name.contains('Flutter')) asset = 'flutter.png';
-    else if (name.contains('Node')) asset = 'nodejs.png';
-    else if (name.contains('Rust')) asset = 'rust.png';
-    else if (name.contains('Python')) asset = 'python.png';
-    else if (name.contains('Android')) asset = 'android.png';
-    else if (name.contains('PHP')) asset = 'php.png';
-    else if (name.contains('NET')) asset = 'dotnet.png';
-    else if (name.contains('Unreal')) asset = 'unreal.png';
-    
-    return Image.asset('assets/frameworks/$asset', fit: BoxFit.contain, errorBuilder: (c, e, s) => Icon(Icons.developer_mode, color: Colors.white24, size: 28));
+    if (name.contains('Flutter'))
+      asset = 'flutter.png';
+    else if (name.contains('Node'))
+      asset = 'nodejs.png';
+    else if (name.contains('Rust'))
+      asset = 'rust.png';
+    else if (name.contains('Python'))
+      asset = 'python.png';
+    else if (name.contains('Android'))
+      asset = 'android.png';
+    else if (name.contains('PHP'))
+      asset = 'php.png';
+    else if (name.contains('NET'))
+      asset = 'dotnet.png';
+    else if (name.contains('Unreal'))
+      asset = 'unreal.png';
+
+    return Image.asset(
+      'assets/frameworks/$asset',
+      fit: BoxFit.contain,
+      errorBuilder: (c, e, s) => Icon(Icons.developer_mode, color: Colors.white24, size: 28),
+    );
   }
 
   String _getDesc(String name) {
@@ -789,6 +919,13 @@ class _ModuleCard extends StatelessWidget {
 
 class ReviewTargetsPage extends StatelessWidget {
   const ReviewTargetsPage({super.key});
+
+  Color _getHealthColor(String? status) {
+    if (status == 'HEALTHY') return Colors.greenAccent;
+    if (status == 'OUTDATED DEPS') return Colors.orangeAccent;
+    if (status == 'VULNERABILITIES FOUND') return Colors.redAccent;
+    return Colors.white24;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -826,13 +963,28 @@ class ReviewTargetsPage extends StatelessWidget {
                       children: [
                         const Text('Review Identified Junk', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
                         const SizedBox(height: 8),
-                        Text('We found ${state.detectedItems.length} items. Review the list below and select items to purge.', style: TextStyle(color: theme.textMuted)),
+                        Text(
+                          'We found ${state.detectedItems.length} items. Review the list below and select items to purge.',
+                          style: TextStyle(color: theme.textMuted),
+                        ),
                         const SizedBox(height: 32),
                         Row(
                           children: [
-                            ElevatedButton(onPressed: state.runCleanup, style: ElevatedButton.styleFrom(backgroundColor: theme.isDark ? Colors.white : theme.accentColor, foregroundColor: theme.isDark ? Colors.black : Colors.white, padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 18)), child: const Text('START PURGE SEQUENCE')),
+                            ElevatedButton(
+                              onPressed: state.runCleanup,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: theme.isDark ? Colors.white : theme.accentColor,
+                                foregroundColor: theme.isDark ? Colors.black : Colors.white,
+                                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 18),
+                              ),
+                              child: const Text('START PURGE SEQUENCE'),
+                            ),
                             const SizedBox(width: 16),
-                            OutlinedButton(onPressed: () => state.setNav('Scan Scope'), style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 18)), child: const Text('ADJUST SCOPE')),
+                            OutlinedButton(
+                              onPressed: () => state.setNav('Scan Scope'),
+                              style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 18)),
+                              child: const Text('ADJUST SCOPE'),
+                            ),
                           ],
                         ),
                       ],
@@ -849,12 +1001,21 @@ class ReviewTargetsPage extends StatelessWidget {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Text('TOTAL RECLAIMABLE', style: TextStyle(fontSize: 10, color: theme.textHint, fontWeight: FontWeight.bold, letterSpacing: 1.5)),
+                        Text(
+                          'TOTAL RECLAIMABLE',
+                          style: TextStyle(fontSize: 10, color: theme.textHint, fontWeight: FontWeight.bold, letterSpacing: 1.5),
+                        ),
                         const SizedBox(height: 16),
-                        Text(SweepEngine.formatMb(totalSelected).split(' ').first, style: TextStyle(fontSize: 56, fontWeight: FontWeight.bold, color: theme.textPrimary)),
+                        Text(
+                          SweepEngine.formatMb(totalSelected).split(' ').first,
+                          style: TextStyle(fontSize: 56, fontWeight: FontWeight.bold, color: theme.textPrimary),
+                        ),
                         Text(SweepEngine.formatMb(totalSelected).split(' ').last, style: TextStyle(fontSize: 18, color: theme.textMuted)),
                         const SizedBox(height: 16),
-                        Text('≈ 1.28% OF HARD DRIVE', style: TextStyle(fontSize: 10, color: theme.accentColor, fontWeight: FontWeight.bold)),
+                        Text(
+                          '≈ 1.28% OF HARD DRIVE',
+                          style: TextStyle(fontSize: 10, color: theme.accentColor, fontWeight: FontWeight.bold),
+                        ),
                       ],
                     ),
                   ),
@@ -871,25 +1032,31 @@ class ReviewTargetsPage extends StatelessWidget {
                 return Container(
                   margin: const EdgeInsets.only(bottom: 16),
                   padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-                  decoration: BoxDecoration(color: theme.bgSubtle, borderRadius: BorderRadius.circular(16), border: Border.all(color: theme.borderSubtle)),
+                  decoration: BoxDecoration(
+                    color: theme.bgSubtle,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: theme.borderSubtle),
+                  ),
                   child: Row(
                     children: [
-                      Checkbox(
-                        value: item.selected,
-                        onChanged: (v) => state.toggleItemSelection(item),
-                        activeColor: theme.accentColor,
-                      ),
+                      Checkbox(value: item.selected, onChanged: (v) => state.toggleItemSelection(item), activeColor: theme.accentColor),
                       const SizedBox(width: 24),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(item.path ?? item.label, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: theme.textPrimary)),
+                            Text(
+                              item.path ?? item.label,
+                              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: theme.textPrimary),
+                            ),
                             const SizedBox(height: 8),
                             Container(
                               padding: const EdgeInsets.all(12),
                               decoration: BoxDecoration(color: theme.accentColor.withOpacity(0.05), borderRadius: BorderRadius.circular(8)),
-                              child: Text(item.note ?? 'Recommended for review. Build artifacts detected.', style: TextStyle(fontSize: 11, color: theme.accentColor)),
+                              child: Text(
+                                item.note ?? 'Recommended for review. Build artifacts detected.',
+                                style: TextStyle(fontSize: 11, color: theme.accentColor),
+                              ),
                             ),
                           ],
                         ),
@@ -897,7 +1064,10 @@ class ReviewTargetsPage extends StatelessWidget {
                       const SizedBox(width: 48),
                       Column(
                         children: [
-                          Text('TYPE', style: TextStyle(fontSize: 9, color: theme.textHint, fontWeight: FontWeight.bold)),
+                          Text(
+                            'TYPE',
+                            style: TextStyle(fontSize: 9, color: theme.textHint, fontWeight: FontWeight.bold),
+                          ),
                           const SizedBox(height: 4),
                           Text(item.category.split(' ').first, style: TextStyle(fontSize: 12, color: theme.textSecondary)),
                         ],
@@ -905,9 +1075,29 @@ class ReviewTargetsPage extends StatelessWidget {
                       const SizedBox(width: 48),
                       Column(
                         children: [
-                          Text('SIZE', style: TextStyle(fontSize: 9, color: theme.textHint, fontWeight: FontWeight.bold)),
+                          Text(
+                            'HEALTH',
+                            style: TextStyle(fontSize: 9, color: theme.textHint, fontWeight: FontWeight.bold),
+                          ),
                           const SizedBox(height: 4),
-                          Text(item.estimatedSize ?? '0M', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: theme.textPrimary)),
+                          Text(
+                            item.healthStatus ?? 'UNKNOWN',
+                            style: TextStyle(fontSize: 10, color: _getHealthColor(item.healthStatus), fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(width: 48),
+                      Column(
+                        children: [
+                          Text(
+                            'SIZE',
+                            style: TextStyle(fontSize: 9, color: theme.textHint, fontWeight: FontWeight.bold),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            item.estimatedSize ?? '0M',
+                            style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: theme.textPrimary),
+                          ),
                         ],
                       ),
                       const SizedBox(width: 48),
@@ -942,7 +1132,10 @@ class PurgeSequencePage extends StatelessWidget {
         children: [
           Icon(Icons.bolt, size: 80, color: theme.accentColor),
           const SizedBox(height: 32),
-          Text(state.isCleaning ? 'PURGE IN SEQUENCE' : 'PURGE COMPLETE', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, letterSpacing: 2, color: theme.textPrimary)),
+          Text(
+            state.isCleaning ? 'PURGE IN SEQUENCE' : 'PURGE COMPLETE',
+            style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, letterSpacing: 2, color: theme.textPrimary),
+          ),
           const SizedBox(height: 12),
           Text(state.status, style: TextStyle(color: theme.textMuted, fontSize: 16)),
           const SizedBox(height: 64),
@@ -952,13 +1145,21 @@ class PurgeSequencePage extends StatelessWidget {
               children: [
                 ClipRRect(
                   borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(value: state.progress, minHeight: 8, backgroundColor: theme.textDisabled, valueColor: AlwaysStoppedAnimation(theme.accentColor)),
+                  child: LinearProgressIndicator(
+                    value: state.progress,
+                    minHeight: 8,
+                    backgroundColor: theme.textDisabled,
+                    valueColor: AlwaysStoppedAnimation(theme.accentColor),
+                  ),
                 ),
                 const SizedBox(height: 16),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text('${(state.progress * 100).toInt()}% COMPLETE', style: TextStyle(fontSize: 11, color: theme.textHint, fontWeight: FontWeight.bold)),
+                    Text(
+                      '${(state.progress * 100).toInt()}% COMPLETE',
+                      style: TextStyle(fontSize: 11, color: theme.textHint, fontWeight: FontWeight.bold),
+                    ),
                     if (!state.isCleaning) TextButton(onPressed: () => state.setNav('Scan Scope'), child: const Text('RETURN TO CONSOLE')),
                   ],
                 ),
@@ -977,26 +1178,78 @@ class SettingsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = context.watch<AppTheme>();
+    final state = context.watch<AppState>();
 
-    return Padding(
+    return SingleChildScrollView(
       padding: const EdgeInsets.all(64),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Appearance & Identity', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: theme.textPrimary)),
+          Text(
+            'Appearance & Identity',
+            style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: theme.textPrimary),
+          ),
           const SizedBox(height: 48),
-          _buildSettingRow(theme, 'Interface Mode', 'Switch between dark for focus or light for clarity.', Row(
-            children: [
-              _ThemeBtn('Light', Icons.wb_sunny_outlined, !theme.isDark, theme.toggleTheme),
-              const SizedBox(width: 12),
-              _ThemeBtn('Dark', Icons.dark_mode_outlined, theme.isDark, theme.toggleTheme),
-            ],
-          )),
+          _buildSettingRow(
+            theme,
+            'Interface Mode',
+            'Switch between dark for focus or light for clarity.',
+            Row(
+              children: [
+                _ThemeBtn('Light', Icons.wb_sunny_outlined, !theme.isDark, theme.toggleTheme),
+                const SizedBox(width: 12),
+                _ThemeBtn('Dark', Icons.dark_mode_outlined, theme.isDark, theme.toggleTheme),
+              ],
+            ),
+          ),
           const SizedBox(height: 48),
-          _buildSettingRow(theme, 'Accent Palette', 'Select the primary system signal color.', Wrap(
-            spacing: 12,
-            children: theme.palette.keys.map((name) => _PaletteBtn(name)).toList(),
-          )),
+          _buildSettingRow(
+            theme,
+            'Accent Palette',
+            'Select the primary system signal color.',
+            Wrap(spacing: 12, children: theme.palette.keys.map((name) => _PaletteBtn(name)).toList()),
+          ),
+          const SizedBox(height: 64),
+          Text(
+            'System Maintenance',
+            style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: theme.textPrimary),
+          ),
+          const SizedBox(height: 48),
+          _buildSettingRow(
+            theme,
+            'Background Disk Guardian',
+            'Sweep will monitor your disk space and notify you when it drops below a threshold.',
+            Row(
+              children: [
+                Switch(value: state.guardianEnabled, onChanged: (v) => state.toggleGuardian(), activeColor: theme.accentColor),
+                const SizedBox(width: 16),
+                Text(state.guardianEnabled ? 'Guardian Active' : 'Guardian Paused', style: TextStyle(color: theme.textSecondary)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 48),
+          _buildSettingRow(
+            theme,
+            'Notification Threshold (${state.diskThreshold.toInt()} GB)',
+            'Trigger a notification when free space is less than this amount.',
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: 400,
+                  child: Slider(
+                    value: state.diskThreshold,
+                    min: 1,
+                    max: 50,
+                    divisions: 49,
+                    label: '${state.diskThreshold.toInt()} GB',
+                    onChanged: (v) => state.setThreshold(v),
+                    activeColor: theme.accentColor,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -1006,7 +1259,10 @@ class SettingsPage extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(title, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: theme.textSecondary)),
+        Text(
+          title,
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: theme.textSecondary),
+        ),
         const SizedBox(height: 8),
         Text(desc, style: TextStyle(color: theme.textMuted)),
         const SizedBox(height: 24),
@@ -1060,9 +1316,16 @@ class _PaletteBtn extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(width: 12, height: 12, decoration: BoxDecoration(color: theme.palette[name], shape: BoxShape.circle)),
+            Container(
+              width: 12,
+              height: 12,
+              decoration: BoxDecoration(color: theme.palette[name], shape: BoxShape.circle),
+            ),
             const SizedBox(width: 12),
-            Text(name, style: TextStyle(color: active ? theme.textPrimary : theme.textMuted, fontWeight: active ? FontWeight.bold : FontWeight.normal)),
+            Text(
+              name,
+              style: TextStyle(color: active ? theme.textPrimary : theme.textMuted, fontWeight: active ? FontWeight.bold : FontWeight.normal),
+            ),
           ],
         ),
       ),
@@ -1083,7 +1346,10 @@ class AboutSystemPage extends StatelessWidget {
         children: [
           Image.asset('assets/icon.png', width: 100),
           const SizedBox(height: 24),
-          Text('Sweep Orchestrator', style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: theme.textPrimary)),
+          Text(
+            'Sweep Orchestrator',
+            style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: theme.textPrimary),
+          ),
           Text('RECLAIM YOUR STORAGE', style: TextStyle(color: theme.textHint, letterSpacing: 2)),
           const SizedBox(height: 64),
           Row(
@@ -1096,7 +1362,10 @@ class AboutSystemPage extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('THE "1GB INCIDENT" ORIGIN', style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1, color: theme.textSecondary)),
+                        Text(
+                          'THE "1GB INCIDENT" ORIGIN',
+                          style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1, color: theme.textSecondary),
+                        ),
                         const SizedBox(height: 24),
                         Text(
                           'Sweep was born in a moment of pure developer frustration. Yesterday at work, a classmate asked me to run a Flutter app on his device. I ran `flutter run ios`, but it crashed.\n\n'
@@ -1118,7 +1387,10 @@ class AboutSystemPage extends StatelessWidget {
                         padding: const EdgeInsets.all(32),
                         child: Column(
                           children: [
-                            Text('AI COLLABORATION', style: TextStyle(fontWeight: FontWeight.bold, color: theme.textSecondary)),
+                            Text(
+                              'AI COLLABORATION',
+                              style: TextStyle(fontWeight: FontWeight.bold, color: theme.textSecondary),
+                            ),
                             const SizedBox(height: 16),
                             Text(
                               'This entire application was architected and built using Vide Coding techniques with Google Gemini. When cloud limits hit, we pushed through using Gemini 1.5 Flash to maintain the high-performance momentum.',
@@ -1149,28 +1421,23 @@ class DashboardPage extends StatelessWidget {
     final state = context.watch<AppState>();
     final theme = context.watch<AppTheme>();
     final stats = state.appStats?.history ?? {};
-    
+
     if (stats.isEmpty) {
-      return Center(child: Text("No cleanup history yet.", style: TextStyle(color: theme.textMuted, fontSize: 18)));
+      return Center(
+        child: Text("No cleanup history yet.", style: TextStyle(color: theme.textMuted, fontSize: 18)),
+      );
     }
 
     final double totalLifetime = stats.values.fold(0, (a, b) => a + b);
-    
+
     final List<BarChartGroupData> barGroups = [];
     int x = 0;
     stats.forEach((date, mb) {
       barGroups.add(
         BarChartGroupData(
           x: x,
-          barRods: [
-            BarChartRodData(
-              toY: mb,
-              color: theme.accentColor,
-              width: 16,
-              borderRadius: BorderRadius.circular(4),
-            )
-          ],
-        )
+          barRods: [BarChartRodData(toY: mb, color: theme.accentColor, width: 16, borderRadius: BorderRadius.circular(4))],
+        ),
       );
       x++;
     });
@@ -1180,9 +1447,15 @@ class DashboardPage extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Savings Dashboard', style: TextStyle(fontSize: 42, fontWeight: FontWeight.bold, color: theme.textPrimary)),
+          Text(
+            'Savings Dashboard',
+            style: TextStyle(fontSize: 42, fontWeight: FontWeight.bold, color: theme.textPrimary),
+          ),
           const SizedBox(height: 16),
-          Text('Lifetime Storage Reclaimed: ${SweepEngine.formatMb(totalLifetime)}', style: TextStyle(color: theme.textSecondary, fontSize: 18, fontWeight: FontWeight.w500)),
+          Text(
+            'Lifetime Storage Reclaimed: ${SweepEngine.formatMb(totalLifetime)}',
+            style: TextStyle(color: theme.textSecondary, fontSize: 18, fontWeight: FontWeight.w500),
+          ),
           const SizedBox(height: 64),
           Expanded(
             child: Container(
@@ -1200,11 +1473,8 @@ class DashboardPage extends StatelessWidget {
                     touchTooltipData: BarTouchTooltipData(
                       getTooltipColor: (_) => theme.sidebarColor,
                       getTooltipItem: (group, groupIndex, rod, rodIndex) {
-                        return BarTooltipItem(
-                          SweepEngine.formatMb(rod.toY),
-                          TextStyle(color: theme.textPrimary, fontWeight: FontWeight.bold),
-                        );
-                      }
+                        return BarTooltipItem(SweepEngine.formatMb(rod.toY), TextStyle(color: theme.textPrimary, fontWeight: FontWeight.bold));
+                      },
                     ),
                   ),
                   titlesData: FlTitlesData(
@@ -1233,10 +1503,7 @@ class DashboardPage extends StatelessWidget {
                   gridData: FlGridData(
                     show: true,
                     drawVerticalLine: false,
-                    getDrawingHorizontalLine: (value) => FlLine(
-                      color: theme.borderSubtle,
-                      strokeWidth: 1,
-                    ),
+                    getDrawingHorizontalLine: (value) => FlLine(color: theme.borderSubtle, strokeWidth: 1),
                   ),
                   borderData: FlBorderData(show: false),
                   barGroups: barGroups,
@@ -1277,7 +1544,9 @@ class _RulesManagerPageState extends State<RulesManagerPage> {
           _rules = jsonDecode(file.readAsStringSync());
         });
       } catch (_) {
-        setState(() { _rules = []; });
+        setState(() {
+          _rules = [];
+        });
       }
     }
   }
@@ -1312,34 +1581,52 @@ class _RulesManagerPageState extends State<RulesManagerPage> {
               children: [
                 TextField(
                   style: TextStyle(color: theme.textPrimary),
-                  decoration: InputDecoration(labelText: 'Framework Name', labelStyle: TextStyle(color: theme.textHint)),
+                  decoration: InputDecoration(
+                    labelText: 'Framework Name',
+                    labelStyle: TextStyle(color: theme.textHint),
+                  ),
                   onChanged: (v) => name = v,
                 ),
                 TextField(
                   style: TextStyle(color: theme.textPrimary),
-                  decoration: InputDecoration(labelText: 'Markers (comma separated, e.g. pubspec.yaml)', labelStyle: TextStyle(color: theme.textHint)),
+                  decoration: InputDecoration(
+                    labelText: 'Markers (comma separated, e.g. pubspec.yaml)',
+                    labelStyle: TextStyle(color: theme.textHint),
+                  ),
                   onChanged: (v) => markers = v,
                 ),
                 TextField(
                   style: TextStyle(color: theme.textPrimary),
-                  decoration: InputDecoration(labelText: 'Cleanup Label', labelStyle: TextStyle(color: theme.textHint)),
+                  decoration: InputDecoration(
+                    labelText: 'Cleanup Label',
+                    labelStyle: TextStyle(color: theme.textHint),
+                  ),
                   onChanged: (v) => cleanupLabel = v,
                 ),
                 TextField(
                   style: TextStyle(color: theme.textPrimary),
-                  decoration: InputDecoration(labelText: 'Cleanup Command (optional)', labelStyle: TextStyle(color: theme.textHint)),
+                  decoration: InputDecoration(
+                    labelText: 'Cleanup Command (optional)',
+                    labelStyle: TextStyle(color: theme.textHint),
+                  ),
                   onChanged: (v) => command = v,
                 ),
                 TextField(
                   style: TextStyle(color: theme.textPrimary),
-                  decoration: InputDecoration(labelText: 'Folders to Nuke (comma separated)', labelStyle: TextStyle(color: theme.textHint)),
+                  decoration: InputDecoration(
+                    labelText: 'Folders to Nuke (comma separated)',
+                    labelStyle: TextStyle(color: theme.textHint),
+                  ),
                   onChanged: (v) => foldersToNuke = v,
                 ),
               ],
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: Text('Cancel', style: TextStyle(color: theme.textMuted))),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text('Cancel', style: TextStyle(color: theme.textMuted)),
+            ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: theme.accentColor),
               onPressed: () {
@@ -1358,7 +1645,7 @@ class _RulesManagerPageState extends State<RulesManagerPage> {
             ),
           ],
         );
-      }
+      },
     );
   }
 
@@ -1373,12 +1660,19 @@ class _RulesManagerPageState extends State<RulesManagerPage> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('Custom Rules Manager', style: TextStyle(fontSize: 42, fontWeight: FontWeight.bold, color: theme.textPrimary)),
+              Text(
+                'Custom Rules Manager',
+                style: TextStyle(fontSize: 42, fontWeight: FontWeight.bold, color: theme.textPrimary),
+              ),
               ElevatedButton.icon(
                 onPressed: () => _showAddRuleDialog(context, theme),
                 icon: const Icon(Icons.add),
                 label: const Text('Add Rule'),
-                style: ElevatedButton.styleFrom(backgroundColor: theme.accentColor, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: theme.accentColor,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
+                ),
               ),
             ],
           ),
@@ -1386,39 +1680,49 @@ class _RulesManagerPageState extends State<RulesManagerPage> {
           Text('Define your own markers and cleanup commands for unsupported frameworks.', style: TextStyle(color: theme.textMuted, fontSize: 18, height: 1.5)),
           const SizedBox(height: 64),
           Expanded(
-            child: _rules.isEmpty 
-              ? Center(child: Text("No custom rules defined.", style: TextStyle(color: theme.textMuted, fontSize: 18)))
-              : ListView.builder(
-                  itemCount: _rules.length,
-                  itemBuilder: (context, index) {
-                    final rule = _rules[index];
-                    return Container(
-                      margin: const EdgeInsets.only(bottom: 16),
-                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-                      decoration: BoxDecoration(color: theme.bgSubtle, borderRadius: BorderRadius.circular(16), border: Border.all(color: theme.borderSubtle)),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(rule['name'] ?? 'Unknown', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: theme.textPrimary)),
-                                const SizedBox(height: 8),
-                                Text('Markers: ${(rule['markers'] as List).join(", ")}', style: TextStyle(color: theme.textSecondary)),
-                                if (rule['command'] != null) Text('Command: ${rule['command']}', style: TextStyle(color: theme.textHint)),
-                                if (rule['foldersToNuke'] != null && (rule['foldersToNuke'] as List).isNotEmpty) Text('Nukes: ${(rule['foldersToNuke'] as List).join(", ")}', style: TextStyle(color: theme.textHint)),
-                              ],
+            child: _rules.isEmpty
+                ? Center(
+                    child: Text("No custom rules defined.", style: TextStyle(color: theme.textMuted, fontSize: 18)),
+                  )
+                : ListView.builder(
+                    itemCount: _rules.length,
+                    itemBuilder: (context, index) {
+                      final rule = _rules[index];
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 16),
+                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                        decoration: BoxDecoration(
+                          color: theme.bgSubtle,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: theme.borderSubtle),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    rule['name'] ?? 'Unknown',
+                                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: theme.textPrimary),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text('Markers: ${(rule['markers'] as List).join(", ")}', style: TextStyle(color: theme.textSecondary)),
+                                  if (rule['command'] != null) Text('Command: ${rule['command']}', style: TextStyle(color: theme.textHint)),
+                                  if (rule['foldersToNuke'] != null && (rule['foldersToNuke'] as List).isNotEmpty)
+                                    Text('Nukes: ${(rule['foldersToNuke'] as List).join(", ")}', style: TextStyle(color: theme.textHint)),
+                                ],
+                              ),
                             ),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
-                            onPressed: () => _deleteRule(index),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
+                            IconButton(
+                              icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                              onPressed: () => _deleteRule(index),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
           ),
         ],
       ),
