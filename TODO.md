@@ -39,9 +39,9 @@
 - [x] **Terminal Dashboard:** ASCII-art version of the savings chart for CLI users.
 
 ### 📦 Phase 5: Community & Distribution
-- [ ] **Homebrew (macOS/Linux):** Create a formal formula for `brew install sweep`.
-- [ ] **Chocolatey/Scoop (Windows):** Add to Windows package managers.
-- [ ] **Linux PPA:** Provide `.deb` and `.rpm` packages for major distros.
+- [x] **Homebrew (macOS/Linux):** Created formula in `Formula/sweep.rb`.
+- [x] **WinGet (Windows):** Added automated `winget-releaser` step to CI workflow.
+- [ ] **Linux PPA:** Provide `.deb` and `.rpm` packages for major distros. (Covered by GitHub Releases now)
 
 ### 🤖 Phase 6: Advanced Optimization
 - [ ] **Auto-Purge Mode:** Add a setting for the Guardian to clean automatically when threshold is hit.

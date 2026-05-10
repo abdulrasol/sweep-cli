@@ -61,6 +61,13 @@ jobs:
           name: Sweep-${{ matrix.platform }}
           path: sweep_desktop/dist/*/
 
+      - name: Generate Checksum
+        run: |
+          cd sweep_desktop/dist/*/
+          shasum -a 256 * > checksum.txt
+          echo "SHA256 for $(ls *.zip || ls *.tar.gz || ls *.dmg || ls *.exe):"
+          cat checksum.txt
+        shell: bash
 
   release:
     name: Create GitHub Release
@@ -82,3 +89,12 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish to WinGet
+        uses: vedantmgoyal2009/winget-releaser@v2
+        with:
+          identifier: Abdulrasol.Sweep
+          installers-regex: '.*\.exe$'
+          token: ${{ secrets.WINGET_TOKEN }}
+        continue-on-error: true # Allow to fail if WINGET_TOKEN is not set
+

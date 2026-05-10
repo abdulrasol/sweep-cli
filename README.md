@@ -83,10 +83,14 @@ Keep Sweep on the cutting edge. Run `sweep --update` to automatically fetch the 
 
 ## 🛠 Installation & Building
 
-### Prerequisites
--   [Dart SDK](https://dart.dev/get-dart) installed on your system.
+### 🍏 macOS / 🐧 Linux (Homebrew) - RECOMMENDED
+1.  Add the tap: `brew tap abdulrasol/sweep`
+2.  Install Sweep: `brew install sweep`
 
-### Quick Install (Mac & Linux)
+### 🪟 Windows (WinGet)
+1.  Run: `winget install Abdulrasol.Sweep`
+
+### Manual Install (Mac & Linux)
 1.  Clone the repo: `git clone https://github.com/abdulrasol/sweep-cli.git`
 2.  Navigate to folder: `cd sweep-cli`
 3.  Run the installer:
@@ -95,7 +99,7 @@ Keep Sweep on the cutting edge. Run `sweep --update` to automatically fetch the 
     ```
 4.  **Usage:** Just type `sweep` anywhere!
 
-### Quick Install (Windows)
+### Manual Install (Windows)
 1.  Open PowerShell as Administrator.
 2.  Run:
     ```powershell
@@ -103,6 +107,7 @@ Keep Sweep on the cutting edge. Run `sweep --update` to automatically fetch the 
     ```
 3.  Move `sweep.exe` to a folder in your System PATH.
 4.  **Usage:** Type `sweep` in your terminal!
+
 
 ---
 
