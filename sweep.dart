@@ -13,15 +13,15 @@ void showProgressBar(int current, int total, {String? status}) {
   int completedWidth = (percent * width).round();
   int remainingWidth = width - completedWidth;
 
-  String bar = '${ConsoleColor.cyan.ansi}[${'=' * completedWidth}>${' ' * (remainingWidth > 0 ? remainingWidth - 1 : 0)}]${ConsoleColor.reset.ansi}';
+  String bar = '\x1b[36m[\x1b[0m' + '=' * completedWidth + '>' + ' ' * (remainingWidth > 0 ? remainingWidth - 1 : 0) + '\x1b[36m]\x1b[0m';
   stdout.write('\r$bar ${(percent * 100).toStringAsFixed(1)}% ${status ?? ''}');
 }
 
-// Helper to wrap strings in ANSI colors using dart_console if possible
+// Helper to wrap strings in ANSI colors
 String color(String text, ConsoleColor c, {bool isBold = false}) {
-  String result = c.ansi;
+  String result = c.ansiSetForegroundColorSequence;
   if (isBold) result += '\x1B[1m';
-  result += text + ConsoleColor.reset.ansi;
+  result += text + '\x1B[0m';
   return result;
 }
 
