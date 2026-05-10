@@ -1,0 +1,103 @@
+name: Multi-Platform Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+        include:
+          - os: macos-latest
+            output: sweep_desktop/build/macos/Build/Products/Release/Sweep.app
+            artifact_name: Sweep-macOS.zip
+          - os: windows-latest
+            output: sweep_desktop/build/windows/x64/runner/Release
+            artifact_name: Sweep-Windows.zip
+          - os: ubuntu-latest
+            output: sweep_desktop/build/linux/x64/release/bundle
+            artifact_name: Sweep-Linux.tar.gz
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libblkid-dev liblzma-dev libgcrypt20-dev
+
+      - name: Get dependencies
+        run: |
+          cd sweep_desktop
+          flutter pub get
+
+      - name: Build Desktop
+        run: |
+          cd sweep_desktop
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            flutter build macos --release
+          elif [ "${{ matrix.os }}" = "windows-latest" ]; then
+            flutter build windows --release
+          else
+            flutter build linux --release
+          fi
+        shell: bash
+
+      - name: Package Artifact (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          cd sweep_desktop/build/macos/Build/Products/Release
+          zip -r ../../../../../${{ matrix.artifact_name }} Sweep.app
+        shell: bash
+
+      - name: Package Artifact (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          cd sweep_desktop/build/windows/x64/runner/Release
+          powershell Compress-Archive -Path * -DestinationPath ../../../../../../${{ matrix.artifact_name }}
+
+      - name: Package Artifact (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cd sweep_desktop/build/linux/x64/release/bundle
+          tar -czvf ../../../../../${{ matrix.artifact_name }} .
+        shell: bash
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: sweep_desktop/${{ matrix.artifact_name }}
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
