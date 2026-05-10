@@ -18,6 +18,12 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # of the product and file versions while build-number is used as the build suffix.
 version: 1.0.0+1
 
+maintainer:
+  name: Abdulrasol
+  email: rasol@example.com # Update with your real email
+
+description: "Master Maintenance Suite for Developers - Clean your workspace and reclaim storage."
+
 environment:
   sdk: ^3.11.4
 
@@ -56,6 +62,7 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.13.1
+  flutter_distributor: ^0.6.6
 
 flutter_launcher_icons:
   android: false

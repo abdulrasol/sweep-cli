@@ -26,6 +26,7 @@
 - [x] **Cross-Platform Build:** Support for macOS (`.app`), Windows (`APPDATA`), and Linux (`.desktop`).
 - [x] **Verbose Installer:** Terminal progress bars and real-time build logs for the desktop app.
 - [x] **Automated CI/CD:** GitHub Actions workflow to build and release binaries on every `v*` tag.
+- [x] **Professional Packaging:** Generate DMG, EXE, DEB, RPM, and AppImage artifacts automatically.
 
 ---
 

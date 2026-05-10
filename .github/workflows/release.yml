@@ -14,14 +14,14 @@ jobs:
         os: [macos-latest, windows-latest, ubuntu-latest]
         include:
           - os: macos-latest
-            output: sweep_desktop/build/macos/Build/Products/Release/Sweep.app
-            artifact_name: Sweep-macOS.zip
+            platform: macos
+            targets: dmg
           - os: windows-latest
-            output: sweep_desktop/build/windows/x64/runner/Release
-            artifact_name: Sweep-Windows.zip
+            platform: windows
+            targets: exe
           - os: ubuntu-latest
-            output: sweep_desktop/build/linux/x64/release/bundle
-            artifact_name: Sweep-Linux.tar.gz
+            platform: linux
+            targets: deb,rpm,appimage
 
     steps:
       - uses: actions/checkout@v4
@@ -36,50 +36,31 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libblkid-dev liblzma-dev libgcrypt20-dev libnotify-dev libsecret-1-dev libayatana-appindicator3-dev
+          sudo apt-get install -y libgtk-3-dev libblkid-dev liblzma-dev libgcrypt20-dev libnotify-dev libsecret-1-dev libayatana-appindicator3-dev rpm
+          # Install appimagetool for AppImage builds
+          sudo curl -L https://github.com/AppImage/AppImageKit/releases/download/13/appimagetool-x86_64.AppImage -o /usr/local/bin/appimagetool
+          sudo chmod +x /usr/local/bin/appimagetool
 
       - name: Get dependencies
         run: |
           cd sweep_desktop
           flutter pub get
 
-      - name: Build Desktop
+      - name: Install Flutter Distributor
+        run: flutter pub global activate flutter_distributor
+
+      - name: Build & Package Desktop
         run: |
           cd sweep_desktop
-          if [ "${{ matrix.os }}" = "macos-latest" ]; then
-            flutter build macos --release
-          elif [ "${{ matrix.os }}" = "windows-latest" ]; then
-            flutter build windows --release
-          else
-            flutter build linux --release
-          fi
-        shell: bash
-
-      - name: Package Artifact (macOS)
-        if: matrix.os == 'macos-latest'
-        run: |
-          cd sweep_desktop/build/macos/Build/Products/Release
-          zip -r ../../../../../${{ matrix.artifact_name }} Sweep.app
-        shell: bash
-
-      - name: Package Artifact (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          cd sweep_desktop/build/windows/x64/runner/Release
-          powershell Compress-Archive -Path * -DestinationPath ../../../../../../${{ matrix.artifact_name }}
-
-      - name: Package Artifact (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          cd sweep_desktop/build/linux/x64/release/bundle
-          tar -czvf ../../../../../${{ matrix.artifact_name }} .
+          flutter_distributor package --platform=${{ matrix.platform }} --targets=${{ matrix.targets }}
         shell: bash
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: sweep_desktop/${{ matrix.artifact_name }}
+          name: Sweep-${{ matrix.platform }}
+          path: sweep_desktop/dist/*/
+
 
   release:
     name: Create GitHub Release
