@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.abdulrasol.sweep</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Sweep</name>
+  <summary>Master Maintenance Suite for Developers</summary>
+  <description>
+    <p>
+      Sweep is a professional-grade, multi-framework workstation utility built to keep your machine clean, fast, and healthy.
+      It automatically detects and cleans build artifacts across Flutter, Node.js, Python, Rust, and more.
+    </p>
+  </description>
+  <launchable type="desktop-id">sweep.desktop</launchable>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/abdulrasol/sweep-cli/main/sweep_desktop/assets/icon.png</image>
+    </screenshot>
+  </screenshots>
+</component>

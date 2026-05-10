@@ -37,9 +37,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libblkid-dev liblzma-dev libgcrypt20-dev libnotify-dev libsecret-1-dev libayatana-appindicator3-dev rpm
-          # Install appimagetool for AppImage builds
-          sudo curl -L https://github.com/AppImage/AppImageKit/releases/download/13/appimagetool-x86_64.AppImage -o /usr/local/bin/appimagetool
-          sudo chmod +x /usr/local/bin/appimagetool
+          # Install appimagetool (Correct URL and Extract to bypass FUSE in CI)
+          curl -L https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage -o appimagetool
+          chmod +x appimagetool
+          ./appimagetool --appimage-extract
+          sudo mv squashfs-root /opt/appimagetool
+          sudo ln -s /opt/appimagetool/AppRun /usr/local/bin/appimagetool
 
       - name: Get dependencies
         run: |
@@ -59,6 +62,8 @@ jobs:
       - name: Build & Package Desktop
         run: |
           cd sweep_desktop
+          # Create metainfo file for RPM
+          cp linux/packaging/rpm/sweep.metainfo.xml .
           flutter pub global run flutter_distributor:main package --platform=${{ matrix.platform }} --targets=${{ matrix.targets }}
         shell: bash
 
