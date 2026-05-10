@@ -386,14 +386,57 @@ void main() async {
         child: const SweepApp(),
       ),
     );
-  } catch (e) {
-    // Last resort: just try to run something so it doesn't close
-    debugPrint('FATAL STARTUP ERROR: $e');
-    runApp(
-      MaterialApp(
-        home: Scaffold(body: Center(child: Text('Startup Error: $e'))),
+    } catch (e, stack) {
+    // Fatal startup crash handler with auto-reporting
+    final repoUrl = 'https://github.com/abdulrasol/sweep-cli/issues/new';
+    final title = Uri.encodeComponent('Desktop Crash: $e');
+    final body = Uri.encodeComponent('''
+    ## Bug Description
+    The Desktop app crashed during initialization.
+
+    ## Debug Information
+    - **OS:** ${Platform.operatingSystem} (${Platform.operatingSystemVersion})
+    - **Dart Version:** ${Platform.version}
+    - **Error:** $e
+
+    ## Stack Trace
+    ```
+    $stack
+    ```
+    ''');
+    final issueUrl = '$repoUrl?title=$title&body=$body';
+
+    runApp(MaterialApp(
+      theme: ThemeData.dark(),
+      home: Scaffold(
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.error_outline, color: Colors.redAccent, size: 64),
+                const SizedBox(height: 24),
+                const Text('FATAL STARTUP ERROR', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 16),
+                Text('$e', textAlign: Center, style: const TextStyle(color: Colors.white70)),
+                const SizedBox(height: 32),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    if (Platform.isMacOS) Process.run('open', [issueUrl]);
+                    else if (Platform.isWindows) Process.run('start', [issueUrl], runInShell: true);
+                    else if (Platform.isLinux) Process.run('xdg-open', [issueUrl]);
+                  },
+                  icon: const Icon(Icons.bug_report_outlined),
+                  label: const Text('REPORT ISSUE ON GITHUB'),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, foregroundColor: Colors.white),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
-    );
+    ));
   }
 }
 

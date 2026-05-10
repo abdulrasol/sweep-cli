@@ -25,6 +25,39 @@ String color(String text, ConsoleColor c, {bool isBold = false}) {
   return result;
 }
 
+void handleFatalError(dynamic error, StackTrace stack) {
+  console.writeLine('\n' + color('-----------------------------------------------------------------------', ConsoleColor.red, isBold: true));
+  console.writeLine(' ' + color('💥 FATAL ERROR DETECTED', ConsoleColor.white, isBold: true));
+  console.writeLine(color('-----------------------------------------------------------------------', ConsoleColor.red, isBold: true));
+  console.writeLine(' ${color('Message:', ConsoleColor.yellow)} $error');
+  console.writeLine('\n ${color('Something went wrong during execution.', ConsoleColor.white)}');
+  console.writeLine(' ${color('Please help us improve Sweep by reporting this issue on GitHub.', ConsoleColor.white)}');
+  
+  final repoUrl = 'https://github.com/abdulrasol/sweep-cli/issues/new';
+  final title = Uri.encodeComponent('Bug Report: $error');
+  final body = Uri.encodeComponent('''
+## Bug Description
+An error occurred while running Sweep CLI.
+
+## Debug Information
+- **OS:** ${Platform.operatingSystem} (${Platform.operatingSystemVersion})
+- **Dart Version:** ${Platform.version}
+- **Error:** $error
+
+## Stack Trace
+```
+$stack
+```
+''');
+
+  final issueUrl = '$repoUrl?title=$title&body=$body';
+  
+  console.writeLine('\n' + color('🔗 Open this link to report directly:', ConsoleColor.cyan, isBold: true));
+  console.writeLine(' $issueUrl');
+  console.writeLine(color('-----------------------------------------------------------------------', ConsoleColor.red, isBold: true) + '\n');
+  exit(1);
+}
+
 Future<void> showDashboard() async {
   final stats = await Stats.load();
   final sysStats = await SweepEngine.getSystemStats();
@@ -132,11 +165,12 @@ Future<void> runInstallation() async {
     if (Platform.isWindows) {
       console.writeLine(color('Success! Add the folder containing $binaryName to your PATH.', ConsoleColor.green));
     } else {
-      await Process.run('sudo', ['mv', binaryName, '/usr/local/bin/sweep'], runInShell: true);
+      final mvRes = await Process.run('sudo', ['mv', binaryName, '/usr/local/bin/sweep'], runInShell: true);
+      if (mvRes.exitCode != 0) throw Exception('Failed to move binary to /usr/local/bin: ${mvRes.stderr}');
       console.writeLine(color('Success! Run using "sweep".', ConsoleColor.green));
     }
   } else {
-    console.writeLine(color('Failed: ${res.stderr}', ConsoleColor.red));
+    throw Exception('Compilation failed: ${res.stderr}');
   }
 }
 
@@ -221,7 +255,7 @@ Future<void> runDesktopBuild() async {
     showProgressBar(3, 3, status: 'Ready');
     console.writeLine('\n' + color('✅ Desktop build completed successfully.', ConsoleColor.green, isBold: true));
   } else {
-    console.writeLine('\n' + color('❌ Build process failed (Exit Code: $exitCode).', ConsoleColor.red, isBold: true));
+    throw Exception('Desktop build process failed with Exit Code: $exitCode');
   }
 }
 
@@ -235,7 +269,8 @@ Future<void> runDesktopInstall() async {
   if (Platform.isMacOS) {
     console.writeLine(color('Copying Sweep.app to /Applications...', ConsoleColor.black));
     showProgressBar(90, 100, status: 'Installing');
-    await Process.run('cp', ['-R', '$desktopDir/build/macos/Build/Products/Release/Sweep.app', '/Applications/'], runInShell: true);
+    final res = await Process.run('cp', ['-R', '$desktopDir/build/macos/Build/Products/Release/Sweep.app', '/Applications/'], runInShell: true);
+    if (res.exitCode != 0) throw Exception('Failed to copy App to /Applications: ${res.stderr}');
     console.writeLine('\n' + color('✨ Success! Sweep is now in your Applications folder.', ConsoleColor.green, isBold: true) + '\n');
   } else if (Platform.isWindows) {
     console.writeLine(color('Deploying Windows artifacts to AppData...', ConsoleColor.black));
@@ -244,7 +279,8 @@ Future<void> runDesktopInstall() async {
     if (!installDir.existsSync()) installDir.createSync(recursive: true);
     
     final buildDir = '$desktopDir\\build\\windows\\x64\\runner\\Release';
-    await Process.run('powershell', ['Copy-Item', '-Path', '"$buildDir\\*"', '-Destination', '"${installDir.path}"', '-Recurse', '-Force']);
+    final res = await Process.run('powershell', ['Copy-Item', '-Path', '"$buildDir\\*"', '-Destination', '"${installDir.path}"', '-Recurse', '-Force']);
+    if (res.exitCode != 0) throw Exception('Failed to deploy Windows artifacts: ${res.stderr}');
     
     console.writeLine('\n' + color('✨ Success! Sweep Desktop is installed in ${installDir.path}.', ConsoleColor.green, isBold: true));
     console.writeLine(color('Tip: Create a shortcut to ${installDir.path}\\sweep_desktop.exe to launch it easily.', ConsoleColor.yellow) + '\n');
@@ -255,7 +291,8 @@ Future<void> runDesktopInstall() async {
     if (!installDir.existsSync()) installDir.createSync(recursive: true);
     
     final buildDir = '$desktopDir/build/linux/x64/release/bundle';
-    await Process.run('cp', ['-r', '$buildDir/.', installDir.path], runInShell: true);
+    final cpRes = await Process.run('cp', ['-r', '$buildDir/.', installDir.path], runInShell: true);
+    if (cpRes.exitCode != 0) throw Exception('Failed to copy Linux bundle: ${cpRes.stderr}');
     
     final desktopFile = File('${Platform.environment['HOME']}/.local/share/applications/sweep.desktop');
     desktopFile.writeAsStringSync('''[Desktop Entry]
@@ -299,14 +336,25 @@ Future<void> updateSweep() async {
     final client = HttpClient();
     final request = await client.getUrl(Uri.parse('https://raw.githubusercontent.com/abdulrasol/sweep-cli/main/sweep.dart'));
     final response = await request.close();
+    if (response.statusCode != 200) throw Exception('Download failed with status: ${response.statusCode}');
     final contents = await response.transform(utf8.decoder).join();
     File(Platform.script.toFilePath()).writeAsStringSync(contents);
     console.writeLine('Update downloaded. Re-installing binary...');
     await runInstallation();
-  } catch (e) { console.writeLine(color('Update failed: $e', ConsoleColor.red)); }
+  } catch (e) { 
+    throw Exception('Update failed: $e'); 
+  }
 }
 
 void main(List<String> args) async {
+  try {
+    await _runMain(args);
+  } catch (e, stack) {
+    handleFatalError(e, stack);
+  }
+}
+
+Future<void> _runMain(List<String> args) async {
   if (args.contains('-h') || args.contains('--help')) { await showHelp(); return; }
   if (args.contains('--install')) { await runInstallation(); return; }
   if (args.contains('--uninstall')) { await runUninstall(); return; }

@@ -7,6 +7,7 @@
 - [x] **Centralized Logic:** Framework markers, cleanup commands, and stats are shared.
 - [x] **Stats Persistence:** Global history tracking for lifetime savings.
 - [x] **Custom Rules Engine:** Fully functional JSON-based rule system.
+- [x] **Error Resilience:** Global try-catch with automated GitHub issue reporting links.
 
 ### 🎨 Desktop Elite Experience
 - [x] **Visual Dashboard:** Interactive `fl_chart` bars showing reclaimed storage history.
