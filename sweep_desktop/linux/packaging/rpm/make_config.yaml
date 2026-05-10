@@ -1,5 +1,6 @@
 display_name: Sweep
 package_name: sweep
+icon: assets/icon.png
 maintainer:
   name: Abdulrasol
   email: rasol@example.com
