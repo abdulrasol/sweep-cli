@@ -10,3 +10,6 @@ description: |
   Clean build artifacts and reclaim storage.
 license: MIT
 group: Applications/System
+categories:
+  - Utility
+  - Development

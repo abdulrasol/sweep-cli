@@ -7,6 +7,9 @@ maintainer:
   email: rasol@example.com
 priority: optional
 section: utils
+categories:
+  - Utility
+  - Development
 description: |
   Master Maintenance Suite for Developers.
   Clean build artifacts and reclaim storage.
