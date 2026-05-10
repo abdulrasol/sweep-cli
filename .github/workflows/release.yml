@@ -47,12 +47,19 @@ jobs:
           flutter pub get
 
       - name: Install Flutter Distributor
-        run: flutter pub global activate flutter_distributor
+        run: |
+          flutter pub global activate flutter_distributor
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            echo "$APPDATA\Pub\Cache\bin" >> $GITHUB_PATH
+          else
+            echo "$HOME/.pub-cache/bin" >> $GITHUB_PATH
+          fi
+        shell: bash
 
       - name: Build & Package Desktop
         run: |
           cd sweep_desktop
-          dart pub global run flutter_distributor package --platform=${{ matrix.platform }} --targets=${{ matrix.targets }}
+          flutter pub global run flutter_distributor:main package --platform=${{ matrix.platform }} --targets=${{ matrix.targets }}
         shell: bash
 
       - name: Upload Artifact
