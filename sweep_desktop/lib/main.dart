@@ -419,7 +419,7 @@ void main() async {
                 const SizedBox(height: 24),
                 const Text('FATAL STARTUP ERROR', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 16),
-                Text('$e', textAlign: Center, style: const TextStyle(color: Colors.white70)),
+                Text('$e', textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70)),
                 const SizedBox(height: 32),
                 ElevatedButton.icon(
                   onPressed: () {
